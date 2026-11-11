@@ -1,0 +1,6 @@
+{
+  "meta": {
+    "title": "DSH HUD 悬浮窗",
+    "description": "发布带 token 的 DSH Web URL、拉起桌面悬浮胶囊、在端口变化时通知重载，并注册 /dsh-hud 打开/隐藏命令。"
+  }
+}

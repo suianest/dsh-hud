@@ -1,0 +1,372 @@
+/* DSH HUD — capsule + panel shell styles.
+   Transparent window: html/body stay transparent; the rounded card is clipped by
+   border-radius (no drop shadow — on a transparent window Windows renders it as
+   a grey square edge). Opaque fallback (DSH_HUD_OPAQUE=1) paints body a solid color. */
+
+:root {
+  --accent: #4f7cff;
+  --accent-2: #9a5cff;
+  --bg: #161a2b;
+  --fg: #eef1ff;
+  --fg-muted: #9aa4c9;
+  --anim-expand: 180ms;
+  --anim-collapse: 140ms;
+
+  /* Theme tokens (t34). :root holds the DARK default so a missing/unknown theme
+     never flashes light; html[data-hud-theme="light"] overrides them below. */
+  --card-bg: #191d36;
+  --card-title: #eef1ff;
+  --btn-bg: rgba(255, 255, 255, 0.14);
+  --btn-bg-hover: rgba(255, 255, 255, 0.24);
+  --btn-bg-active: rgba(255, 255, 255, 0.3);
+  --btn-fg: #eef1ff;
+  --danger-hover: rgba(255, 92, 122, 0.6);
+  /* Whale outline glow (kept light in dark mode so the black whale reads on
+     dark wallpapers; dimmed in light mode). */
+  --line: rgba(255, 255, 255, 0.95);
+}
+
+/* Light theme follows the embedded page's light mode (t34). The whale outline
+   glow is dimmed so it stays visible on a light background instead of washing
+   out. */
+html[data-hud-theme="light"] {
+  --bg: #eef0f5;
+  --fg: #1a1f36;
+  --fg-muted: #5a6273;
+  --card-bg: #f5f6fb;
+  --card-title: #1a1f36;
+  --btn-bg: rgba(23, 30, 56, 0.06);
+  --btn-bg-hover: rgba(23, 30, 56, 0.12);
+  --btn-bg-active: rgba(23, 30, 56, 0.18);
+  --btn-fg: #1a1f36;
+  --danger-hover: rgba(255, 92, 122, 0.6);
+  --line: rgba(26, 31, 54, 0.7);
+}
+
+* { box-sizing: border-box; }
+
+html,
+body {
+  margin: 0;
+  padding: 0;
+  width: 100%;
+  height: 100%;
+  background: transparent;
+  overflow: hidden;
+  font-family: "Segoe UI", "Microsoft YaHei", system-ui, sans-serif;
+  color: var(--fg);
+  user-select: none;
+  -webkit-user-select: none;
+  cursor: default;
+}
+
+body.opaque { background: var(--bg); }
+
+.shell { position: absolute; inset: 0; }
+
+/* Only the active state is displayed; the window is resized by main. */
+body.state-capsule #panel { display: none; }
+body.state-panel #capsule { display: none; }
+
+/* ---------- 胶囊（鲸鱼圆标，t18） ---------- */
+.capsule-shell { padding: 4px; }
+.capsule-icon {
+  position: relative;
+  width: 100%;
+  height: 100%;
+  /* 透明底，只留鲸鱼本体（用户 2026-11-08：去掉周边白色背景）。
+     黑色鲸鱼配一圈极淡白描边，深色/浅色壁纸上都能看清。 */
+  border-radius: 50%;
+  background: transparent;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  /* 不画阴影：见 .panel-shell 的说明 */
+  cursor: grab;
+  overflow: visible;
+  transition: transform 140ms ease;
+}
+.capsule-icon:hover { transform: scale(1.06); }
+.capsule-icon:active { cursor: grabbing; transform: scale(0.98); }
+.capsule-whale {
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+  /* 图标不参与拖拽/点击：事件都落在 .capsule-icon 上。 */
+  pointer-events: none;
+  -webkit-user-drag: none;
+  /* 白描边 + 一点投影：透明底上鲸鱼在任何壁纸都不糊成一片。 */
+  filter: drop-shadow(0 0 1.2px var(--line))
+          drop-shadow(0 1px 2px rgba(0, 0, 0, 0.35));
+}
+
+/* ---------- 胶囊悬停：沿鲸鱼外轮廓跑动的蓝光 ----------
+   直接把鲸鱼同一段 path 描边（pathLength=100 归一化），用虚线偏移让
+   一小段高光沿轮廓循环移动；描边带渐变 + 双层 drop-shadow 形成荧光。
+   不加底色/底光：胶囊完全透明，只有轮廓上的光。 */
+.capsule-outline {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  pointer-events: none;
+  opacity: 0;
+  transition: opacity 180ms ease;
+  overflow: visible;
+}
+.capsule-outline .outline-path {
+  fill: none;
+  stroke: url(#hudWhaleGlow);
+  stroke-width: 1.7;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  stroke-dasharray: 12 100;
+  stroke-dashoffset: 0;
+  /* 只要一条清晰的线：不加任何 blur / drop-shadow / 背光层 */
+  filter: none;
+}
+.capsule-icon:hover .capsule-outline,
+body.demo-hover .capsule-icon .capsule-outline { opacity: 1; }
+.capsule-icon:hover .capsule-outline .outline-path,
+body.demo-hover .capsule-icon .outline-path { animation: outline-run 2.6s linear infinite; }
+.capsule-icon:active .capsule-outline { opacity: 0; }
+@keyframes outline-run {
+  from { stroke-dashoffset: 0; }
+  to   { stroke-dashoffset: -112; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .capsule-icon:hover .capsule-outline .outline-path,
+  body.demo-hover .capsule-icon .outline-path { animation: none; }
+}
+
+/* 胶囊边缘吸附提示（t35）：拖拽期间在最近的工作区边显示 2px 高亮，吸附后
+   180ms 淡出。只改视觉，最终位置仍由主进程 setPosition 决定。 */
+.capsule-icon::after {
+  content: '';
+  position: absolute;
+  background: rgba(96, 165, 250, 0.9);
+  opacity: 0;
+  transition: opacity 180ms ease;
+  pointer-events: none;
+  z-index: 6;
+  border-radius: 1px;
+}
+.capsule-snap-left::after { left: -3px; top: 16px; bottom: 16px; width: 2px; opacity: 1; }
+.capsule-snap-right::after { right: -3px; top: 16px; bottom: 16px; width: 2px; opacity: 1; }
+.capsule-snap-top::after { top: -3px; left: 16px; right: 16px; height: 2px; opacity: 1; }
+.capsule-snap-bottom::after { bottom: -3px; left: 16px; right: 16px; height: 2px; opacity: 1; }
+
+/* ---------- 面板：鲸鱼边框 ----------
+   窗口 = 卡片(600×816) + 四周透明外边距（30/30/30/54），尾巴从卡片底下探出，
+   顶栏是一条白线稿海浪 + Q 版鲸鱼头装饰带（豆包 Seedream 生成，已抠底去绿边）。
+   卡片自己裁圆角（overflow:hidden），窗口本身透明、无阴影。 */
+.panel-shell { padding: 0; }
+
+.panel-card {
+  position: absolute;
+  inset: 0;
+  background: var(--card-bg);
+  border-radius: 22px;
+  overflow: hidden;
+}
+
+.panel-header {
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  height: 46px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 0 14px;
+  -webkit-app-region: drag;
+}
+
+.panel-header:active { cursor: grabbing; }
+
+.panel-title {
+  font-size: 15px;
+  font-weight: 600;
+  letter-spacing: 0.3px;
+  color: var(--card-title);
+}
+
+.panel-actions {
+  display: flex;
+  gap: 8px;
+  -webkit-app-region: no-drag;
+}
+
+.panel-btn {
+  width: 30px;
+  height: 30px;
+  padding: 0;
+  border: 0;
+  border-radius: 9px;
+  background: var(--btn-bg);
+  color: var(--btn-fg);
+  font-size: 14px;
+  line-height: 1;
+  cursor: pointer;
+  transition: background 0.14s ease;
+}
+
+.panel-btn:hover { background: var(--btn-bg-hover); }
+.panel-btn:active { background: var(--btn-bg-active); }
+.panel-btn.danger:hover { background: var(--danger-hover); }
+
+.panel-body {
+  position: absolute;
+  top: 60px;
+  left: 14px;
+  right: 14px;
+  bottom: 14px;
+}
+
+.web-host { position: absolute; inset: 0; }
+
+/* ---------- 命令面板（t35） ----------
+   主进程打开前先 web.detach() 让出 DOM 层，所以这个覆盖层可被点击。
+   与面板同色系：--card-bg + 1px 描边 + 14px 圆角，宽度 80% 最大 520。 */
+.palette {
+  position: absolute;
+  left: 50%;
+  top: 88px;
+  transform: translateX(-50%);
+  width: 80%;
+  max-width: 520px;
+  background: var(--card-bg);
+  border: 1px solid rgba(150, 160, 190, 0.25);
+  border-radius: 14px;
+  box-shadow: 0 12px 40px rgba(0, 0, 0, 0.4);
+  z-index: 200;
+  overflow: hidden;
+}
+.palette[hidden] { display: none; }
+.palette-input {
+  width: 100%;
+  padding: 14px;
+  border: 0;
+  border-bottom: 1px solid rgba(150, 160, 190, 0.2);
+  background: transparent;
+  color: var(--fg);
+  font: inherit;
+  font-size: 14px;
+  outline: none;
+  user-select: text;
+  -webkit-user-select: text;
+}
+.palette-list {
+  list-style: none;
+  margin: 0;
+  padding: 6px 8px 8px;
+  max-height: 400px;
+  overflow: auto;
+}
+.palette-item {
+  padding: 0 12px;
+  height: 40px;
+  line-height: 40px;
+  border-radius: 8px;
+  color: var(--fg);
+  cursor: pointer;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.palette-item.selected,
+.palette-item:hover { background: var(--btn-bg-hover); }
+.palette-empty {
+  padding: 12px;
+  color: var(--fg-muted);
+  text-align: center;
+}
+
+/* ---------- 展开 / 收起动画 ----------
+   展开：主进程先切到面板尺寸，renderer 收到 state=panel 后播放 fade+scale-in。
+   收起：renderer 播放 fade+scale-out（forwards 保持透明），结束后通知主进程
+   把窗口缩回胶囊尺寸。时长与 constants.ANIM_*_MS 保持一致。 */
+@keyframes expand-in {
+  from { opacity: 0; transform: scale(0.97) translateY(-6px); }
+  to   { opacity: 1; transform: scale(1) translateY(0); }
+}
+@keyframes collapse-out {
+  from { opacity: 1; transform: scale(1); }
+  to   { opacity: 0; transform: scale(0.97); }
+}
+.panel-card.anim-expand { animation: expand-in var(--anim-expand) cubic-bezier(0.22, 1, 0.36, 1); }
+.panel-card.anim-collapse { animation: collapse-out var(--anim-collapse) cubic-bezier(0.4, 0, 1, 1) forwards; }
+
+/* 尊重系统「减少动态效果」：只保留透明度淡入/淡出，去掉缩放与位移。 */
+@media (prefers-reduced-motion: reduce) {
+  @keyframes expand-in {
+    from { opacity: 0; }
+    to   { opacity: 1; }
+  }
+  @keyframes collapse-out {
+    from { opacity: 1; }
+    to   { opacity: 0; }
+  }
+}
+
+/* Manual edge resize grips: invisible strips on all four panel edges. The
+   cursor becomes the matching double-headed arrow so the drag affordance is
+   obvious; pressing starts a resize, releasing ends it. The top strip stops
+   short of the header buttons so it never steals their clicks. */
+.edge-grip {
+  position: fixed;
+  z-index: 90;
+  cursor: ew-resize;
+  display: none;
+  -webkit-app-region: no-drag;
+}
+.edge-grip::after {
+  content: '';
+  position: absolute;
+  border-radius: 1px;
+  background: rgba(130, 160, 255, 0.9);
+  opacity: 0;
+  transition: opacity 0.12s ease;
+}
+.edge-grip-left,
+.edge-grip-right {
+  top: 0;
+  bottom: 0;
+  width: 12px;
+}
+.edge-grip-left { left: 0; }
+.edge-grip-right { right: 0; }
+.edge-grip-left::after,
+.edge-grip-right::after {
+  top: 50%;
+  width: 2px;
+  height: 96px;
+  margin-top: -48px;
+}
+.edge-grip-left::after { left: 3px; }
+.edge-grip-right::after { right: 3px; }
+
+.edge-grip-top,
+.edge-grip-bottom {
+  left: 0;
+  right: 0;
+  height: 10px;
+  cursor: ns-resize;
+}
+.edge-grip-top { top: 0; right: 116px; }
+.edge-grip-bottom { bottom: 0; }
+.edge-grip-top::after,
+.edge-grip-bottom::after {
+  left: 50%;
+  width: 96px;
+  height: 2px;
+  margin-left: -48px;
+}
+/* The top strip stops 116px short of the header buttons, so its own 50% is
+   58px left of the window centre; compensate to keep the hint centred. */
+.edge-grip-top::after { top: 3px; left: calc(50% + 58px); }
+.edge-grip-bottom::after { bottom: 3px; }
+
+body.state-panel .edge-grip { display: block; }
+body.state-panel .edge-grip:hover::after { opacity: 1; }

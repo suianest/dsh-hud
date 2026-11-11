@@ -1,0 +1,70 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <title>DSH HUD · 连接失败</title>
+    <style>
+      :root { --accent: #4f7cff; --fg: #eef1ff; --fg-muted: #9aa4c9; }
+      * { box-sizing: border-box; }
+      html, body {
+        margin: 0; height: 100%;
+        background: transparent;
+        font-family: "Segoe UI", "Microsoft YaHei", system-ui, sans-serif;
+        color: var(--fg);
+      }
+      .wrap { height: 100%; display: flex; align-items: center; justify-content: center; padding: 20px; }
+      .card {
+        background: linear-gradient(160deg, #1a1f35 0%, #242b47 55%, #2f2a54 100%);
+        border-radius: 16px;
+        padding: 28px 24px;
+        text-align: center;
+        max-width: 320px;
+        box-shadow: 0 12px 32px rgba(0, 0, 0, 0.35);
+      }
+      .icon { font-size: 40px; margin-bottom: 12px; }
+      h1 { font-size: 16px; margin: 0 0 8px; font-weight: 600; }
+      p { font-size: 13px; color: var(--fg-muted); margin: 0 0 6px; line-height: 1.6; word-break: break-all; }
+      .actions { margin-top: 20px; display: flex; gap: 10px; justify-content: center; }
+      button { border: 0; border-radius: 10px; cursor: pointer; font-size: 13px; padding: 9px 16px; color: #fff; }
+      button.retry { background: var(--accent); }
+      button.start { background: rgba(255, 255, 255, 0.12); }
+      button:hover { filter: brightness(1.1); }
+      .hint { margin-top: 14px; font-size: 11px; color: var(--fg-muted); }
+    </style>
+  </head>
+  <body>
+    <div class="wrap">
+      <div class="card">
+        <div class="icon" id="icon">⚠️</div>
+        <h1 id="title">无法连接 DSH</h1>
+        <p id="detail">DSH 服务不可达</p>
+        <div class="actions">
+          <button class="retry" id="retry">重试</button>
+          <button class="start" id="start">启动 DSH</button>
+        </div>
+        <div class="hint">DSH 运行后，token 桥插件会自动写入 discovery.json，约 15 秒内可重试</div>
+      </div>
+    </div>
+    <script>
+      (function () {
+        var q = new URLSearchParams(location.search);
+        var kind = q.get('kind') || 'unreachable';
+        var detail = q.get('detail') || '';
+        var isAuth = kind === 'auth';
+
+        document.getElementById('title').textContent = isAuth ? '登录已失效' : '无法连接 DSH';
+        document.getElementById('icon').textContent = isAuth ? '🔒' : '⚠️';
+        document.getElementById('detail').textContent = isAuth
+          ? (detail || '401：会话未授权，token 可能已过期')
+          : (detail || '端口不可达，DSH 服务可能未启动');
+
+        document.getElementById('retry').addEventListener('click', function () {
+          if (window.webBridge) window.webBridge.retry();
+        });
+        document.getElementById('start').addEventListener('click', function () {
+          if (window.webBridge) window.webBridge.startDsh();
+        });
+      })();
+    </script>
+  </body>
+</html>

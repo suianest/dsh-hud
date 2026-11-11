@@ -1,0 +1,56 @@
+{
+  "name": "dsh-hud",
+  "version": "0.3.0",
+  "private": true,
+  "description": "DSH HUD — Windows 常驻悬浮胶囊 + 520px 紧凑面板（内嵌 DSH Web UI）",
+  "author": "dsh-hud",
+  "productName": "DSH HUD",
+  "main": "main.js",
+  "engines": {
+    "node": ">=20"
+  },
+  "scripts": {
+    "start": "electron .",
+    "check": "node --check main.js && node --check preload.js && node --check src/constants.js && node --check src/window-state.js && node --check src/hotkeys.js && node --check src/hud-window.js && node --check src/discovery.js && node --check src/compact-css.js && node --check src/web-embed.js && node --check src/autostart.js && node --check src/control.js && node --check src/config.js && node --check renderer/hud.js && node --check renderer/web-preload.js && node --check renderer/host-bounds.js"
+  },
+  "devDependencies": {
+    "electron": "^44.7.0",
+    "electron-builder": "^26.0.12"
+  },
+  "build": {
+    "appId": "com.dsh.hud",
+    "productName": "DSH HUD",
+    "asar": true,
+    "npmRebuild": false,
+    "electronDist": "../runtime/node_modules/electron/dist",
+    "directories": {
+      "output": "../dist",
+      "buildResources": "build"
+    },
+    "files": [
+      "main.js",
+      "preload.js",
+      "src/**/*",
+      "renderer/**/*",
+      "scripts/**/*",
+      "package.json"
+    ],
+    "win": {
+      "target": [
+        {
+          "target": "dir",
+          "arch": [
+            "x64"
+          ]
+        },
+        {
+          "target": "zip",
+          "arch": [
+            "x64"
+          ]
+        }
+      ],
+      "icon": "build/icon.ico"
+    }
+  }
+}

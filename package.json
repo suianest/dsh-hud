@@ -1,0 +1,20 @@
+{
+  "name": "dsh-hud",
+  "version": "0.3.0",
+  "private": false,
+  "description": "Windows 常驻悬浮胶囊 + 520px 紧凑面板（豆包式），内嵌 DSH Web UI；配套 Cordis 插件负责发现 DSH 服务并写入发现文件。",
+  "license": "MIT",
+  "engines": {
+    "node": ">=20"
+  },
+  "files": [
+    "plugin/**",
+    "docs/**",
+    "README.md"
+  ],
+  "dsh": {
+    "bundle": {
+      "patch": "./plugin/cordis.patch.yml"
+    }
+  }
+}
