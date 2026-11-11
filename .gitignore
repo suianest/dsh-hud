@@ -1,0 +1,30 @@
+# --- runtime payloads (downloaded by scripts/setup.mjs) -------------------
+runtime/
+.electron-cache/
+.staging-dsh-exe/
+.pnpm-store/
+pnpm-lock.yaml
+node_modules/
+
+# --- local, machine-specific config (never share paths / tokens) ----------
+config.local.json
+*.local.json
+
+# --- build output & evidence ---------------------------------------------
+dist/
+artifacts/
+tests/e2e/logs/
+*.log
+
+# --- archived one-off experiments (kept on disk, never shipped) -----------
+操作日志/
+
+# --- editor / OS ----------------------------------------------------------
+.vscode/
+.idea/
+Thumbs.db
+desktop.ini
+.DS_Store
+
+# --- local art experiments (whale frame, canceled; keep on disk only) -----
+art/

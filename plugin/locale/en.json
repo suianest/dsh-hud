@@ -1,0 +1,6 @@
+{
+  "meta": {
+    "title": "DSH HUD floating window",
+    "description": "Publishes the authenticated DSH Web URL, spawns the desktop HUD capsule, reloads it on Web UI port changes, and registers the /dsh-hud open-hide command."
+  }
+}
