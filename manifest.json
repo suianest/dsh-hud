@@ -1,0 +1,9 @@
+{
+  "version": "0.4.0",
+  "notes": "",
+  "appAsar": {
+    "url": "https://github.com/suianest/dsh-hud/releases/download/v0.4.0/app.asar",
+    "sha256": "fb300c892781dbfc59b51b2a0268744118844c18e3fc4f9d77804d67c1eeeda9",
+    "size": 502096
+  }
+}
