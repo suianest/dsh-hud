@@ -46,6 +46,14 @@ Windows 常驻悬浮胶囊 + 520×720 紧凑面板（豆包式）。点胶囊或
 
 ## 形态 A · 便携版（最简单）
 
+**一键安装（推荐）**
+
+1. 打开 [最新 Release](https://github.com/suianest/dsh-hud/releases/latest)，下载 `安装 DSH HUD.cmd`（几百字节）。
+2. 双击它。脚本会自动建目录、下载约 151 MB 安装包、校验 SHA-256、解压到 `%LOCALAPPDATA%\DSH HUD`，最后告诉你装在哪并问要不要现在启动。
+3. 想装到别的盘：`powershell -ExecutionPolicy Bypass -File install-dsh-hud.ps1 -InstallDir "D:\Apps\DSH HUD"`；离线时加 `-ZipPath "手动下载的zip"`。
+
+**手动安装**
+
 1. 获取 `DSH-HUD-<版本>-win-x64.zip`（[最新 Release](https://github.com/suianest/dsh-hud/releases/latest) 或本地 `make-portable` 产物），解压到任意目录。
 2. **双击 `DSH HUD.lnk`** 或 `启动 DSH HUD.cmd`。
 3. 屏幕边缘出现胶囊即成功；右键胶囊 → 勾选「开机自启」。
