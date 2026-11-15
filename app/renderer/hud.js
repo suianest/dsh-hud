@@ -201,7 +201,10 @@
   // 收起动画握手：播完 collapse-out 后告诉主进程执行真正的缩窗。
   panelCard.addEventListener('animationend', (e) => {
     if (e.animationName === 'collapse-out') {
-      panelCard.classList.remove('anim-collapse');
+      // Keep .anim-collapse (fill-mode forwards, opacity 0) until the main
+      // process resizes the window and the capsule state arrives. Removing it
+      // here made the panel card pop back at full size for a frame, so the
+      // 64x64 window briefly showed the panel's top-left corner.
       hud.collapseDone();
     } else if (e.animationName === 'expand-in') {
       panelCard.classList.remove('anim-expand');

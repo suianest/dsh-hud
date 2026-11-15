@@ -4,15 +4,17 @@
  * On activation it:
  *   1. publishes the authenticated DSH Web URL (with a fresh `?token=`) to
  *      `%LOCALAPPDATA%\dsh-hud\discovery.json` (t2);
- *   2. can OPTIONALLY start the Electron HUD app, through one of two opt-in
- *      paths (both default OFF — see `cfg` for the reasoning):
- *        - `spawnApp`: node.exe launcher as a direct subprocess (crashes inside
- *          this host: crashpad_client_win.cc:867, exit 0xFFFF7003);
- *        - `shellLaunch`: ask Explorer to run a generated .cmd (works only after
- *          a human clicks the Windows approval prompt).
- *      Default behaviour: the HUD comes up from the login Startup entry (written
- *      by the `autostart` IPC action) or a manual double-click / tray menu,
- *      and this plugin just keeps discovery.json fresh + serves /dsh-hud.
+ *   2. brings the Electron HUD app up when needed. There are three paths:
+ *        - `autoStartWithDsh` (DEFAULT ON): a Windows scheduled task
+ *          (`dsh-hud-launch`) created via PowerShell, which runs outside this
+ *          process tree with a normal token, so no UAC prompt appears;
+ *        - login Startup entry (written by the first-run `autostart` install);
+ *        - two opt-in low-level paths, both default OFF: `spawnApp` (node.exe
+ *          launcher as a direct subprocess — crashes inside this host:
+ *          crashpad_client_win.cc:867, exit 0xFFFF7003) and `shellLaunch`
+ *          (ask Explorer to run a generated .cmd — needs a human click).
+ *      `/dsh-hud on|off|status` start/stop/report the capsule; `toggle|show|
+ *      hide|reload` drive an already-running one.
  *      NOTE: this host process is Medium integrity (it can write
  *      %LOCALAPPDATA%), unlike the Low-IL shells the agent tools run in. That
  *      is what makes the `ipc/request.json` desktop-focus bridge work.

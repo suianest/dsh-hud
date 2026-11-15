@@ -275,7 +275,33 @@ function runCaptureFlow(hud) {
     if (withPalette) {
       try { hud._closePalette(); } catch { /* ignore */ }
     }
+    if (process.env.DSH_HUD_CAPTURE_COLLAPSE === '1') {
+      await captureCollapseTransition();
+      return;
+    }
     await captureCapsule();
+  };
+
+  // Dev aid: capture the panel->capsule transition frame by frame. The glitch
+  // we are chasing only exists for a frame or two around the resize, so grab a
+  // few stills right after the collapse animation ends.
+  const captureCollapseTransition = async () => {
+    const dir = path.dirname(paths.panelShell);
+    hud.collapse();
+    const marks = [['collapse-a', 150], ['collapse-b', 178], ['collapse-c', 240]];
+    let prev = 0;
+    for (const [name, at] of marks) {
+      await delay(at - prev);
+      prev = at;
+      try {
+        const img = await hud.win.webContents.capturePage();
+        const file = path.join(dir, name + '.png');
+        writeCapture(file, img.toPNG());
+      } catch (err) {
+        console.error('[hud] collapse capture failed:', err && err.message);
+      }
+    }
+    app.quit();
   };
 
   const captureCapsule = async () => {

@@ -156,8 +156,8 @@ body.demo-hover .capsule-icon .outline-path { animation: outline-run 2.6s linear
 .capsule-snap-top::after { top: -3px; left: 16px; right: 16px; height: 2px; opacity: 1; }
 .capsule-snap-bottom::after { bottom: -3px; left: 16px; right: 16px; height: 2px; opacity: 1; }
 
-/* ---------- 面板：鲸鱼边框 ----------
-   面板 = 520×720 的纯色卡片（鲸鱼边框方案已于 2026-11-10 回退）。
+/* ---------- 面板（520×720 纯色卡片） ----------
+   贴图式「鲸鱼边框」方案已于 2026-11-10 回退，保留纯色卡片 + 圆角。
    卡片自己裁圆角（overflow:hidden），窗口本身透明、无阴影。 */
 .panel-shell { padding: 0; }
 

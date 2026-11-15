@@ -40,7 +40,7 @@ node --test
 在**仓库根目录**执行：
 
 ```bat
-node app\scripts\make-portable（会自动产出 `dist/DSH-HUD-<version>-win-x64.zip`）.js
+node app/scripts/make-portable.js --no-zip   （后续第 4 步单独打 zip）
 ```
 
 脚本做四件事，任一断言失败都会以非 0 退出：
@@ -48,7 +48,7 @@ node app\scripts\make-portable（会自动产出 `dist/DSH-HUD-<version>-win-x64
 1. `assertSourceFiles()`：22 个 canonical 源文件（`main.js`、`src/*.js`、`renderer/*`、
    `scripts/focus-dsh.ps1`、`scripts/launch-hud.cjs` …）缺一即停；
 2. 全量重建 `dist/win-unpacked/`（Electron 44.7.0 + `app.asar`，不残留旧版本 dll）；
-3. `assertAsarContents()`：asar 内必须包含同一份 22 个 canonical 条目；
+3. `assertAsarContents()`：asar 内必须包含同一份 canonical 清单条目（当前 24 项，见 `CANONICAL_FILES`）；
 4. 收尾：`electron.exe` → `app/DSH HUD.exe`，补 `启动 DSH HUD.cmd`、`DSH HUD.lnk`、
    `app/resources/artifacts` 目录联接与根目录 `README.txt`（P-06 布局：Electron 运行时全在 `app/`，根目录只留启动器）。
 
@@ -129,12 +129,12 @@ SmartScreen、混合 DPI、热键被占用等）。
 - 维护侧：`git revert` 对应提交，发一个 patch 版本。
 - 已发布的 zip **不要**用同名文件覆盖：GitHub Release 保留历史附件，便于用户回退。
 
-## 发布后要上传的资产（3 个）
+## 发布后要准备的资产（Release 附件 2 个 + 仓库 manifest 1 个）
 
 | 资产 | 来源 | 用途 |
 |---|---|---|
 | `DSH-HUD-<ver>-win-x64.zip` | `dist/DSH-HUD-<ver>-win-x64.zip` | 便携整包，用户下载解压 |
 | `app.asar` | `dist/win-unpacked/app/resources/app.asar` | 应用内更新只下这个（约 0.5 MB） |
-| `manifest.json` | 仓库根 / `dist/win-unpacked/manifest.json` | 更新清单；`releases/latest/download/manifest.json` 是回退源之一 |
+| `manifest.json` | 仓库根 / `dist/win-unpacked/manifest.json`（**不是** Release 附件） | 更新清单；`releases/latest/download/manifest.json` 是回退源之一 |
 
 `app/src/updater.js` 会按顺序尝试 raw.githubusercontent → jsDelivr → `releases/latest/download/manifest.json` → GitHub REST API（base64），前一条失败自动换下一条。
