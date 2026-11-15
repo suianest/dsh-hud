@@ -14,7 +14,18 @@ Windows 常驻悬浮胶囊 + 520px 紧凑面板（豆包式）。点胶囊或按
 
 ![胶囊](screenshots/capsule.png)
 
-> 截图里的深蓝配色来自社区 UI 皮肤；不装皮肤时是 DSH 默认浅色主题，面板会跟随切换。
+> 截图里的深蓝／金边配色来自下面推荐的社区皮肤，**不是 HUD 自带**；不装皮肤时面板会跟随 DSH 默认的浅色／深色主题。
+
+### 推荐搭配：深海女仆工坊（UI 皮肤）
+
+| 项 | 值 |
+|---|---|
+| 包名 | `@smalltailqwq/dsh-client-ui-skin-maid-atelier` |
+| 最新版本 | 0.1.10（2026-11-06） |
+| 安装 | DSH 插件市场搜索「深海女仆工坊」安装，或 `plugin_manager install_bundle @smalltailqwq/dsh-client-ui-skin-maid-atelier` |
+
+装好后桌面版与 HUD 面板会同时套用这套皮肤（两者连的是同一个 DSH Web 服务），面板里不必再单独配置。
+皮肤由 DSH 插件市场单独更新；HUD 的「检查更新」只更新 HUD 本体。
 
 ---
 
