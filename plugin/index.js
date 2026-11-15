@@ -42,7 +42,10 @@
  *     { "type": "reload" | "show" | "hide" | "toggle", "seq": N }
  */
 import { mkdir, writeFile, rename, rm, readdir, stat } from 'node:fs/promises';
-import { appendFileSync, existsSync, readFileSync, renameSync, statSync } from 'node:fs';
+import { appendFileSync, createReadStream, createWriteStream, existsSync, readFileSync, renameSync, statSync } from 'node:fs';
+import { createHash } from 'node:crypto';
+import { Readable } from 'node:stream';
+import { pipeline } from 'node:stream/promises';
 import { spawn } from 'node:child_process';
 import os from 'node:os';
 import path from 'node:path';
@@ -198,6 +201,65 @@ export function resolveHud(opts = {}) {
     mode: 'missing',
     reason: '未找到 HUD，请下载 Release 包解压后设置 hudDir 或 DSH_HUD_DIR',
   };
+}
+
+// --- first-run app install (npm one-click) --------------------------------
+// Installed from npm, the package only carries the plugin: the ~150 MB desktop
+// app lives in a GitHub Release. On first activation — and only when no HUD is
+// resolvable — download that zip, verify its sha256, and extract it into
+// %LOCALAPPDATA%\\DSH HUD, so "install by package name" really is one click.
+const RELEASE_API = 'https://api.github.com/repos/suianest/dsh-hud/releases/latest';
+const AUTO_INSTALL_DIR = () => path.join(process.env.LOCALAPPDATA || os.tmpdir(), 'DSH HUD');
+
+async function downloadTo(url, dest) {
+  const res = await fetch(url, { redirect: 'follow', headers: { 'user-agent': 'dsh-hud-plugin' } });
+  if (!res.ok || !res.body) throw new Error('HTTP ' + res.status + ' for ' + url);
+  await pipeline(Readable.fromWeb(res.body), createWriteStream(dest));
+  return dest;
+}
+
+function sha256File(file) {
+  return new Promise((resolve, reject) => {
+    const h = createHash('sha256');
+    createReadStream(file)
+      .on('data', (c) => h.update(c))
+      .on('error', reject)
+      .on('end', () => resolve(h.digest('hex')));
+  });
+}
+
+export async function installHudApp(opts = {}) {
+  if (process.platform !== 'win32') return { ok: false, message: 'only supported on Windows' };
+  const dir = opts.dir || AUTO_INSTALL_DIR();
+  const rel = await (await fetch(RELEASE_API, { headers: { 'user-agent': 'dsh-hud-plugin' } })).json();
+  const asset = (rel.assets || []).find((a) => /^DSH-HUD-.*-win-x64\.zip$/.test(a.name));
+  if (!asset) return { ok: false, message: 'release has no win-x64 zip' };
+  const zip = path.join(os.tmpdir(), 'dsh-hud-' + (asset.id || Date.now()) + '.zip');
+  await downloadTo(asset.browser_download_url, zip);
+  const digest = (asset.digest || '').replace(/^sha256:/, '').toLowerCase();
+  if (digest) {
+    const got = await sha256File(zip);
+    if (got !== digest) {
+      await rm(zip, { force: true });
+      throw new Error('sha256 mismatch: expected ' + digest + ' got ' + got);
+    }
+  }
+  await mkdir(dir, { recursive: true });
+  const q = (v) => "'" + String(v).replace(/'/g, "''") + "'";
+  const ps = 'Expand-Archive -LiteralPath ' + q(zip) + ' -DestinationPath ' + q(dir) + ' -Force';
+  await new Promise((resolve, reject) => {
+    const child = spawn('powershell.exe', ['-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-Command', ps], {
+      stdio: 'ignore',
+      windowsHide: true,
+    });
+    child.on('error', reject);
+    child.on('close', (code) => (code === 0 ? resolve() : reject(new Error('Expand-Archive exit ' + code))));
+  });
+  await rm(zip, { force: true });
+  const exe = path.join(dir, 'app', 'DSH HUD.exe');
+  return existsSync(exe)
+    ? { ok: true, dir, message: 'installed ' + exe }
+    : { ok: false, message: 'extracted but app/DSH HUD.exe is missing in ' + dir };
 }
 
 export function resolveDesktopExe(opts = {}) {
@@ -856,6 +918,13 @@ export function apply(ctx, config = {}) {
       const d = await writeDiscovery();
       log('discovery written port=' + d.port + ' origin=' + d.origin);
       notifyReloadIfChanged(d);
+      // npm installs carry the plugin only; fetch the app once when it is absent.
+      if (process.platform === 'win32' && process.env.DSH_HUD_NO_AUTO_INSTALL !== '1' && !resolveHud().found) {
+        log('HUD not found; auto-installing from the latest release (first run)');
+        await installHudApp()
+          .then((r) => log('auto-install:', r.ok ? r.message : 'failed: ' + r.message))
+          .catch((err) => log('auto-install failed:', err?.message ?? err));
+      }
       const wantAutostart = autostartDesired();
       if (wantAutostart === true) {
         await applyAutostart(true).catch((err) => log('autostart reconcile failed:', err?.message ?? err));

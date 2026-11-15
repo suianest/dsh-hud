@@ -36,13 +36,25 @@ Windows 常驻悬浮胶囊 + 520×720 紧凑面板（豆包式）。点胶囊或
 | | 形态 A · 便携版 | 形态 B · DSH 插件形态 |
 |---|---|---|
 | 用户看到什么 | 一个解压目录，双击 `DSH HUD.lnk` | DSH 里多一个插件；插件代建登录启动项 + 桌面/开始菜单快捷方式 |
-| 需要准备 | 应用包（zip） | 应用包（zip）+ 在 DSH 里装插件 |
+| 需要准备 | 应用包（zip） | 只需在 DSH 里装插件（应用包首次自动下载） |
 | 怎么起来 | 双击快捷方式 / 开机自启 | 随 DSH 启动（计划任务）/ 登录自启 / 双击快捷方式 / `/dsh-hud on` |
 | 插件是否必需 | 是（否则面板连不上 DSH，显示错误页） | 是 |
 
-> 注意：**两种形态都需要本地有一份应用包**。插件由 DSH 宿主进程加载，直接 `spawn` Electron 会被系统拒绝（`0x80000003`，Chromium 在 JS 之前就崩），所以启动走的是**计划任务** `dsh-hud-launch`：任务在独立进程树、普通令牌下运行，不需要人工确认。插件形态指的是**装完不用自己管启动**，不是「只有插件就能跑」。
+> 说明：插件形态下，**应用包由插件首次运行时自动从 Release 下载**（约 151 MB，校验 SHA-256 后解压到 `%LOCALAPPDATA%\DSH HUD`；设 `DSH_HUD_NO_AUTO_INSTALL=1` 可关）。插件由 DSH 宿主进程加载，直接 `spawn` Electron 会被系统拒绝（`0x80000003`，Chromium 在 JS 之前就崩），所以启动走的是**计划任务** `dsh-hud-launch`：任务在独立进程树、普通令牌下运行，不需要人工确认。插件形态指的是**装完不用自己管启动**，不是「只有插件就能跑」。
 
 ---
+
+## 三条安装路线（都保留，任选其一）
+
+| 路线 | 适合谁 | 怎么做 | 应用包 |
+|---|---|---|---|
+| **A · 便携版** | 只要桌面胶囊，不想碰插件 | 下载 `安装 DSH HUD.cmd` 双击，或解压 zip 后双击 `DSH HUD.lnk` | 安装器自动下载 |
+| **B · GitHub 仓库装插件** | 有 git、想用仓库版（推荐开发者） | DSH 添加插件填 `github:suianest/dsh-hud`（或本地目录 `D:\...\dsh-hud`） | 插件首次运行自动下载 |
+| **C · npm 包名装插件** | 只想填一个名字（等发布） | 填 `dsh-hud-capsule` | 插件首次运行自动下载 |
+
+- **A** 见下一节；**B/C** 见「形态 B」。
+- B 需要本机有 `git`（仓库自带 `installer\...` 不含 git，需自行安装或使用本文档附带的 PortableGit 说明）；C 需要先把包装到 npm（当前未发布，见 `docs/install-via-npm.md`）。
+- 三条路线可以混用：先装便携版再装插件，插件会直接识别已有安装；反过来也行。
 
 ## 形态 A · 便携版（最简单）
 
@@ -68,10 +80,15 @@ Windows 常驻悬浮胶囊 + 520×720 紧凑面板（豆包式）。点胶囊或
 2. 在 DSH 里安装插件（插件管理界面填仓库地址，或命令行）：
 
    ```bash
-   plugin_manager install_bundle https://github.com/suianest/dsh-hud
-   # 本地目录安装（填你解压后的目录）
+   # ① GitHub 仓库（需要 git）
+   plugin_manager install_bundle github:suianest/dsh-hud
+   # ② 本地目录（填仓库或解压后的目录）
    plugin_manager install_bundle D:\path\to\dsh-hud
+   # ③ npm 包名（等发布后）
+   plugin_manager install_bundle dsh-hud-capsule
    ```
+
+   > `suianest/dsh-hud` 这种写法**不被识别**：DSH 只接受绝对路径、`github:`/`git:` 这类 git 形式、或合法 npm 名（详见 `docs/install-via-npm.md`）。
 
 3. 插件负责：写 `%LOCALAPPDATA%\dsh-hud\discovery.json`（每 15s 刷新）、注册计划任务 `dsh-hud-launch`、写登录启动项、代建桌面与开始菜单快捷方式、处理 `/dsh-hud` 命令与 IPC 桥。
    **首次定位到打包版 HUD 时，插件会自动写一次登录启动项**（`Startup\dsh-hud.cmd`），并在同目录记下 `autostart.json`（`by: plugin-first-run`）——之后在右键菜单里关掉「开机自启」就不会被重新装上。想跳过这次自动安装，启动 DSH 前设 `DSH_HUD_NO_AUTOSTART=1`。

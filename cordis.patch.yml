@@ -1,0 +1,9 @@
+- insert:
+    - id: dsh-hud-token-bridge
+      # npm-installable form: the root package IS the plugin package
+      # (package.json main → plugin/index.js), so the insert name must be the
+      # package name that pnpm will place in the profile's node_modules.
+      # Do not confuse this with plugin/cordis.patch.yml, which keeps the
+      # scoped name for local "install from the plugin/ directory" setups.
+      name: dsh-hud-capsule
+      config: {}
