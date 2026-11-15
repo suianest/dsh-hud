@@ -49,8 +49,8 @@ node app\scripts\make-portable（会自动产出 `dist/DSH-HUD-<version>-win-x64
    `scripts/focus-dsh.ps1`、`scripts/launch-hud.cjs` …）缺一即停；
 2. 全量重建 `dist/win-unpacked/`（Electron 44.7.0 + `app.asar`，不残留旧版本 dll）；
 3. `assertAsarContents()`：asar 内必须包含同一份 22 个 canonical 条目；
-4. 收尾：`electron.exe` → `DSH HUD.exe`，补 `启动 DSH HUD.cmd`、`DSH HUD.lnk`、
-   `resources/artifacts` 目录联接。
+4. 收尾：`electron.exe` → `app/DSH HUD.exe`，补 `启动 DSH HUD.cmd`、`DSH HUD.lnk`、
+   `app/resources/artifacts` 目录联接与根目录 `README.txt`（P-06 布局：Electron 运行时全在 `app/`，根目录只留启动器）。
 
 核对输出（数字与路径应一致）：
 
@@ -58,8 +58,8 @@ node app\scripts\make-portable（会自动产出 `dist/DSH-HUD-<version>-win-x64
 [make-portable] source files assertion OK (22 canonical files present)
 [make-portable] asar content assertion OK (22 canonical entries present)
 [make-portable] app.asar entries: <N>
-[make-portable] exe: ...\dist\win-unpacked\DSH HUD.exe OK
-[make-portable] app.asar: ...\dist\win-unpacked\resources\app.asar <bytes> bytes
+[make-portable] exe: ...\dist\win-unpacked\app\DSH HUD.exe OK
+[make-portable] app.asar: ...\dist\win-unpacked\app\resources\app.asar <bytes> bytes
 [make-portable] done: ...\dist\win-unpacked
 ```
 
@@ -95,8 +95,8 @@ Compress-Archive -Path dist\win-unpacked\* -DestinationPath "dist\DSH-HUD-$v-win
 
 | 检查项 | 期望 |
 | --- | --- |
-| `dist\win-unpacked\DSH HUD.exe` | 存在（`make-portable.js` 不写 exe 图标/版本资源；需要资源信息时改跑 `build-portable.cmd`） |
-| `resources\app.asar` | 含 `scripts/focus-dsh.ps1`、`scripts/launch-hud.cjs`（第 2 步断言已保证） |
+| `dist\win-unpacked\app\DSH HUD.exe` | 存在（`make-portable.js` 不写 exe 图标/版本资源；需要资源信息时改跑 `build-portable.cmd`） |
+| `app\resources\app.asar` | 含 `scripts/focus-dsh.ps1`、`scripts/launch-hud.cjs`（第 2 步断言已保证） |
 | zip 解开后双击 | 干净机器上能出胶囊；出错时先看第 7 节 |
 | zip 大小 | ~150 MB（Electron 占绝大部分） |
 
@@ -117,7 +117,7 @@ Compress-Archive -Path dist\win-unpacked\* -DestinationPath "dist\DSH-HUD-$v-win
 > `-2147483645` 退出，这不是安装失败。
 >
 > 因此插件默认 `spawnApp=false`、`shellLaunch=false`：请用**登录自启**或**双击
-> `DSH HUD.exe`** 启动。需要手动拉起时，插件会提示而不是静默失败。
+> `DSH HUD.lnk`** 启动（不要直接双击 `app\DSH HUD.exe`，缺参数会崩）。需要手动拉起时，插件会提示而不是静默失败。
 
 同时附上 `docs/environment.md` 第 3 节的「无法自动适配」表（GPO 禁 Run、未签名 exe 的
 SmartScreen、混合 DPI、热键被占用等）。
@@ -128,3 +128,13 @@ SmartScreen、混合 DPI、热键被占用等）。
   `%LOCALAPPDATA%\dsh-hud\`）。
 - 维护侧：`git revert` 对应提交，发一个 patch 版本。
 - 已发布的 zip **不要**用同名文件覆盖：GitHub Release 保留历史附件，便于用户回退。
+
+## 发布后要上传的资产（3 个）
+
+| 资产 | 来源 | 用途 |
+|---|---|---|
+| `DSH-HUD-<ver>-win-x64.zip` | `dist/DSH-HUD-<ver>-win-x64.zip` | 便携整包，用户下载解压 |
+| `app.asar` | `dist/win-unpacked/app/resources/app.asar` | 应用内更新只下这个（约 0.5 MB） |
+| `manifest.json` | 仓库根 / `dist/win-unpacked/manifest.json` | 更新清单；`releases/latest/download/manifest.json` 是回退源之一 |
+
+`app/src/updater.js` 会按顺序尝试 raw.githubusercontent → jsDelivr → `releases/latest/download/manifest.json` → GitHub REST API（base64），前一条失败自动换下一条。

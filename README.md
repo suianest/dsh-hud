@@ -4,6 +4,18 @@ Windows 常驻悬浮胶囊 + 520px 紧凑面板（豆包式）。点胶囊或按
 
 技术栈：Electron（44.7.0，随包分发）+ 一个很薄的 Cordis 插件（写发现文件、开机自启、IPC 桥）。
 
+## 截图
+
+| 面板（520×720） | 命令面板（⌘ / Ctrl+K） |
+|---|---|
+| ![面板](screenshots/panel.png) | ![命令面板](screenshots/palette.png) |
+
+胶囊：悬停时鲸鱼轮廓会亮起一圈荧光描边。
+
+![胶囊](screenshots/capsule.png)
+
+> 截图里的深蓝配色来自社区 UI 皮肤；不装皮肤时是 DSH 默认浅色主题，面板会跟随切换。
+
 ---
 
 ## 两种形态
@@ -21,11 +33,11 @@ Windows 常驻悬浮胶囊 + 520px 紧凑面板（豆包式）。点胶囊或按
 
 ## 形态 A · 便携版（最简单）
 
-1. 获取 `DSH-HUD-<版本>-win-x64.zip`（Release 或本地 `make-portable` 产物），解压到任意目录。
+1. 获取 `DSH-HUD-<版本>-win-x64.zip`（[最新 Release](https://github.com/suianest/dsh-hud/releases/latest) 或本地 `make-portable` 产物），解压到任意目录。
 2. **双击 `DSH HUD.lnk`** 或 `启动 DSH HUD.cmd`。
 3. 屏幕边缘出现胶囊即成功；右键胶囊 → 勾选「开机自启」。
 
-> ⚠️ **不要双击 `DSH HUD.exe`**。它必须带 `--no-sandbox --user-data-dir=…` 才能在这类环境下启动，零参数会在 Chromium 初始化阶段直接崩（`0x80000003`，连日志都来不及写）。快捷方式里已经写好参数。见 `操作日志/待解决问题.md` 的 P-06。
+> ⚠️ **不要双击 `app\DSH HUD.exe`**。它必须带 `--no-sandbox --user-data-dir=…` 才能在这类环境下启动，零参数会在 Chromium 初始化阶段直接崩（`0x80000003`，连日志都来不及写）。快捷方式里已经写好参数。见 `操作日志/待解决问题.md` 的 P-06。
 
 ---
 
@@ -42,9 +54,23 @@ Windows 常驻悬浮胶囊 + 520px 紧凑面板（豆包式）。点胶囊或按
    plugin_manager install_bundle D:\DeepSeekData\workspace\dsh-hud\plugin
    ```
 3. 插件负责：写 `%LOCALAPPDATA%\dsh-hud\discovery.json`（每 15s 刷新）、按配置写登录启动项、处理 `/dsh-hud` 命令与 IPC 桥。
-4. 重新登录一次（或 `DSH_HUD` 就绪后手动跑 `/dsh-hud show`），胶囊出现，之后完全不用碰快捷方式。
+   **首次定位到打包版 HUD 时，插件会自动写一次登录启动项**（`Startup\dsh-hud.cmd`），并在同目录记下
+   `autostart.json`（`by: plugin-first-run`）——之后你在右键菜单里关掉「开机自启」就不会被重新装上。
+   想跳过这次自动安装，把环境变量 `DSH_HUD_NO_AUTOSTART=1` 打开再启动 DSH。
+4. 重新登录一次（或 `/dsh-hud on`），胶囊出现，之后完全不用碰快捷方式。
 
-插件定位应用包的顺序：`config.hudDir` / `config.exePath` → 环境变量 `DSH_HUD_DIR` / `DSH_HUD_EXE` → `config.local.json` → 常见安装目录（`%LOCALAPPDATA%\DSH HUD\…`）→ 仓库 `dist\win-unpacked\DSH HUD.exe`。都找不到时在日志和 `/dsh-hud` 里给出可读提示，不会崩。
+   插件提供四个命令：
+
+   | 命令 | 作用 |
+   |---|---|
+   | `/dsh-hud on` | 启动胶囊（走计划任务 `dsh-hud-launch`，无需人工确认） |
+   | `/dsh-hud off` | 退出胶囊进程 |
+   | `/dsh-hud status` | 查看是否在运行、安装路径 |
+   | `/dsh-hud toggle` / `show` / `hide` / `reload` | 开关/显示/隐藏/重载已运行的胶囊 |
+
+**跟随 DSH 启动**：插件在 DSH 启动时会用同一个计划任务把胶囊拉起来（默认开启）。不想要就设环境变量 `DSH_HUD_AUTOSTART_WITH_DSH=0`，或在右键菜单里关掉「开机自启」（那样连登录自启也一起关）。
+
+插件定位应用包的顺序：`config.hudDir` / `config.exePath` → 环境变量 `DSH_HUD_DIR` / `DSH_HUD_EXE` → `config.local.json` → 常见安装目录（`%LOCALAPPDATA%\DSH HUD\…`）→ 仓库 `dist\win-unpacked\app\DSH HUD.exe`（新布局优先，回退旧平铺 `DSH HUD.exe`）。都找不到时在日志和 `/dsh-hud` 里给出可读提示，不会崩。
 
 ---
 
@@ -69,11 +95,11 @@ Windows 常驻悬浮胶囊 + 520px 紧凑面板（豆包式）。点胶囊或按
 | --- | --- |
 | 点击胶囊 | 展开 520×720 面板 |
 | `Ctrl+Alt+Space` | 全局热键，展开 / 收起 |
-| `Ctrl+K` 或面板标题栏 ⌘ 按钮 | 命令面板（可搜索的动作列表） |
+| `Ctrl+K` 或面板标题栏 ⌘ 按钮 | 命令面板（可搜索的动作列表，含「检查更新」） |
 | 拖动胶囊 / 面板标题栏 | 移动窗口，胶囊松手后吸附屏幕边缘（留 8px） |
 | 拖面板左/右/上/下边缘 | 按住拖动改宽高（不按不动，不会自己长） |
 | 面板「—」按钮 / `Esc` | 收起为胶囊 |
-| 右键胶囊 | 打开 DSH 桌面窗口 / 打开 DSH 浮窗 / Token 补充 / 退出 DSH 浮窗 / 开机自启 |
+| 右键胶囊 | 打开 DSH 桌面窗口 / 打开 DSH 浮窗 / Token 补充 / 检查更新 / 退出 DSH 浮窗 / 开机自启 |
 
 - **面板失焦默认不收起**（想恢复旧行为：`DSH_HUD_BLUR_COLLAPSE=1`）。
 - 位置（胶囊与面板各自）记在用户数据目录，下次启动沿用；多屏 / DPI 变化会重新钳位。

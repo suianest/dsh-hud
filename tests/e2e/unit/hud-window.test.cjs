@@ -448,13 +448,29 @@ test('context menu template exposes the 2 primary actions plus the autostart gro
   const tpl = hud.buildContextMenu();
   const labels = tpl.filter((i) => i.type !== 'separator').map((i) => i.label);
   // 「关闭 DSH 浮窗」在 t20 移除：胶囊与面板是点击联动的，面板右上角已有 ×。
-  assert.deepEqual(labels, ['打开 DSH 桌面窗口', '打开 DSH 浮窗', 'Token 补充', '退出 DSH 浮窗', '开机自启']);
+  assert.deepEqual(labels, ['打开 DSH 桌面窗口', '打开 DSH 浮窗', 'Token 补充', '检查更新', '退出 DSH 浮窗', '开机自启']);
 
   const autostart = tpl.find((i) => i.label === '开机自启');
   assert.equal(autostart.type, 'checkbox');
   if (savedStartup === undefined) delete process.env.DSH_HUD_STARTUP_CMD;
   else process.env.DSH_HUD_STARTUP_CMD = savedStartup;
   assert.equal(autostart.checked, false, 'autostart off by default (no login item)');
+});
+
+test('palette toggles closed and tells the renderer to hide it (2026-11-13)', () => {
+  const ctx = setup({ discovery: freshDiscovery() });
+  const { hud, win } = boot(ctx);
+  hud.showPanel();
+
+  hud._openPalette();
+  assert.equal(hud._paletteOpen, true);
+  const sent = win.webContents.sent || [];
+  assert.ok(sent.some((m) => m.channel === 'hud:palette-open'), 'renderer got the open payload');
+
+  // Second ⌘ / Ctrl+K press must close it again, both in main and in the DOM.
+  hud._togglePalette();
+  assert.equal(hud._paletteOpen, false);
+  assert.ok(sent.some((m) => m.channel === 'hud:palette-close'), 'renderer asked to hide the palette');
 });
 
 test('right sidebar opens outward: panel widens to 1040 DIP and keeps the left edge (2026-11-08)', () => {

@@ -28,6 +28,9 @@
     <!-- ======================= 面板态（520x720） ======================= -->
     <div id="panel" class="shell panel-shell">
       <div class="panel-card" id="panel-card">
+        <!-- Scrim lives inside the card: the card clips it to the same 22px
+             radius, so no square dark corners outside the rounded window. -->
+        <div class="palette-backdrop" id="palette-backdrop" hidden></div>
         <div class="panel-header" id="panel-drag" title="拖动移动">
           <span class="panel-title">DSH 助手</span>
           <div class="panel-actions">
@@ -46,11 +49,13 @@
         </div>
       </div>
 
-      <!-- 命令面板（t35）：主进程打开前先 web.detach() 让出 DOM 层 -->
+      <!-- 命令面板（t35）：主进程打开前先 web.detach() 让出 DOM 层。
+           背板只在面板打开时出现（此时 view 已 detach，整块 DOM 可见）。 -->
       <div class="palette" id="palette" hidden>
         <input class="palette-input" id="palette-input" type="text"
                placeholder="搜索命令…" autocomplete="off" spellcheck="false" />
         <ul class="palette-list" id="palette-list"></ul>
+        <div class="palette-foot"><span>↑↓ 选择</span><span>Enter 执行</span><span>Esc 关闭</span></div>
       </div>
     </div>
 

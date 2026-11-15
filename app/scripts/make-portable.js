@@ -3,7 +3,8 @@
 // ---------------------------------------------------------------------------
 // make-portable.js — 手动打包 fallback（纯 JS，不 spawn 子进程）
 //
-// 产出 dist/win-unpacked/（可运行便携目录）+ dist/*.zip。
+// 产出 dist/win-unpacked/（可运行便携目录；运行时在 app/ 子目录，根目录只有
+// 启动器 DSH HUD.lnk / 启动 DSH HUD.cmd / README.txt）+ dist/*.zip。
 // 在 DSH agent 沙箱内可用（electron-builder 收集 node_modules 时 spawn pnpm
 // 会撞 EPERM 边界，本脚本绕开它）。
 //
@@ -14,6 +15,7 @@
 //   node app\scripts\make-portable.js
 // ---------------------------------------------------------------------------
 
+const crypto = require('crypto');
 const fs = require('fs');
 const path = require('path');
 const asar = require('@electron/asar');
@@ -27,6 +29,10 @@ const APP_DIR = process.env.DSH_HUD_APP_DIR
 const ROOT = path.resolve(APP_DIR, '..');
 const ELECTRON_DIST = path.join(ROOT, 'runtime', 'node_modules', 'electron', 'dist');
 const OUT_DIR = path.join(ROOT, 'dist', 'win-unpacked');
+// P-06: the Electron runtime (exe/resources/dll/locales) lives in OUT_DIR/app/;
+// the root only holds launcher files (lnk/cmd/README.txt) so users never
+// double-click the raw exe (which crashes before JS runs, 0x80000003).
+const APP_OUT_DIR = path.join(OUT_DIR, 'app');
 const STAGE_DIR = path.join(ROOT, 'dist', '.staging');
 const EXE_NAME = 'DSH HUD.exe';
 
@@ -46,6 +52,7 @@ const CANONICAL_FILES = [
   'src/control.js',
   'src/discovery.js',
   'src/extensions.js',
+  'src/shortcut.js',
   'src/hotkeys.js',
   'src/hud-window.js',
   'src/web-embed.js',
@@ -59,6 +66,7 @@ const CANONICAL_FILES = [
   'renderer/whale.svg',
   'scripts/focus-dsh.ps1',
   'scripts/launch-hud.cjs',
+  'src/updater.js',
 ];
 
 function copyDir(src, dest) {
@@ -114,7 +122,7 @@ async function assertAsarContents(asarPath) {
 // ---------------------------------------------------------------------------
 
 function ensureIpcJunction() {
-  const linkPath = path.join(OUT_DIR, 'resources', 'artifacts');
+  const linkPath = path.join(APP_OUT_DIR, 'resources', 'artifacts');
   const target = path.join(ROOT, 'artifacts');
   if (!fs.existsSync(target)) {
     console.log('[make-portable] skip ipc junction: repo artifacts dir missing');
@@ -147,7 +155,7 @@ function writeLauncherCmd() {
     'rem --no-sandbox and a writable --user-data-dir are both required here:',
     'rem Chromium fails before JS runs without them (see docs/environment.md).',
     'set "DSH_HUD_USER_DATA=%~dp0udd"',
-    `start "" "%~dp0${EXE_NAME}" --no-sandbox --user-data-dir="%~dp0udd"`,
+    `start "" "%~dp0app\\${EXE_NAME}" --no-sandbox --user-data-dir="%~dp0udd"`,
     '',
   ].join('\r\n');
   const file = path.join(OUT_DIR, '启动 DSH HUD.cmd');
@@ -158,14 +166,14 @@ function writeLauncherCmd() {
 
 function writeShortcut() {
   const lnk = path.join(OUT_DIR, 'DSH HUD.lnk');
-  const exe = path.join(OUT_DIR, EXE_NAME);
+  const exe = path.join(APP_OUT_DIR, EXE_NAME);
   const udd = path.join(OUT_DIR, 'udd');
   const ps = [
     "$s = New-Object -ComObject WScript.Shell;",
     `$l = $s.CreateShortcut('${lnk.replace(/'/g, "''")}');`,
     `$l.TargetPath = '${exe.replace(/'/g, "''")}';`,
     `$l.Arguments = '--no-sandbox --user-data-dir="${udd.replace(/'/g, "''")}"';`,
-    `$l.WorkingDirectory = '${OUT_DIR.replace(/'/g, "''")}';`,
+    `$l.WorkingDirectory = '${APP_OUT_DIR.replace(/'/g, "''")}';`,
     "$l.Save();",
   ].join(' ');
   try {
@@ -180,20 +188,50 @@ function writeShortcut() {
   }
 }
 
+function writeReadme() {
+  const file = path.join(OUT_DIR, 'README.txt');
+  const body = [
+    'DSH HUD - portable package',
+    '',
+    'Double-click "DSH HUD.lnk" (or run "Start DSH HUD.cmd") to start.',
+    '',
+    'Do NOT double-click app\\DSH HUD.exe directly: it needs the flags the',
+    'shortcut passes, and starting it with no arguments crashes before any',
+    'log is written (0x80000003).',
+    '',
+  ].join('\r\n');
+  fs.writeFileSync(file, body, 'ascii');
+  console.log('[make-portable] readme written:', file);
+  return file;
+}
+
 function writeZip() {
   const pkg = JSON.parse(fs.readFileSync(path.join(APP_DIR, 'package.json'), 'utf8'));
   const zipPath = path.join(ROOT, 'dist', `DSH-HUD-${pkg.version}-win-x64.zip`);
   // Compress-Archive does not follow junctions (verified: total=77, no
   // artifacts\** entries), so the IPC junction can stay attached.
+  // Runtime state must never ship: boot.log / udd are per-machine artifacts.
+  for (const junk of [path.join(OUT_DIR, 'app', 'boot.log'), path.join(OUT_DIR, 'udd')]) {
+    try { fs.rmSync(junk, { recursive: true, force: true }); } catch { /* locked: retried below */ }
+  }
   try {
     fs.rmSync(zipPath, { force: true });
     const ps = [
+      "$ErrorActionPreference = 'Stop';",
       `Compress-Archive -Path '${path.join(OUT_DIR, '*').replace(/'/g, "''")}'`,
       `-DestinationPath '${zipPath.replace(/'/g, "''")}' -CompressionLevel Optimal -Force`,
     ].join(' ');
-    require('child_process').execFileSync('powershell.exe', ['-NoProfile', '-NonInteractive', '-Command', ps], {
-      stdio: 'ignore',
+    const run = () => require('child_process').execFileSync('powershell.exe', ['-NoProfile', '-NonInteractive', '-Command', ps], {
+      stdio: ['ignore', 'pipe', 'pipe'],
     });
+    try {
+      run();
+    } catch (first) {
+      // A just-killed HUD can hold the exe/dll handles for a moment.
+      require('child_process').execFileSync('powershell.exe', ['-NoProfile', '-Command', 'Start-Sleep -Milliseconds 900']);
+      run();
+    }
+    if (!fs.existsSync(zipPath)) throw new Error('Compress-Archive produced no file');
     console.log('[make-portable] zip:', zipPath, `${fs.statSync(zipPath).size} bytes`);
     return zipPath;
   } catch (err) {
@@ -210,6 +248,7 @@ function postBuild() {
   ensureIpcJunction();
   writeLauncherCmd();
   writeShortcut();
+  writeReadme();
   if (!process.argv.includes('--no-zip')) writeZip();
 }
 
@@ -239,10 +278,10 @@ async function main() {
   //    每次全量重建，避免旧 45.2.2 的 dll/locales 残留造成版本混杂（t21 #1）。
   rmrf(OUT_DIR);
   console.log('[make-portable] copying Electron dist (runtime 44.7.0) ...');
-  copyDir(ELECTRON_DIST, OUT_DIR);
+  copyDir(ELECTRON_DIST, APP_OUT_DIR);
 
   // 3. 打包 app.asar
-  const asarPath = path.join(OUT_DIR, 'resources', 'app.asar');
+  const asarPath = path.join(APP_OUT_DIR, 'resources', 'app.asar');
   fs.mkdirSync(path.dirname(asarPath), { recursive: true });
   console.log('[make-portable] packing app.asar ...');
   await asar.createPackage(STAGE_DIR, asarPath);
@@ -251,8 +290,8 @@ async function main() {
   await assertAsarContents(asarPath);
 
   // 4. 重命名 exe
-  const exeFrom = path.join(OUT_DIR, 'electron.exe');
-  const exeTo = path.join(OUT_DIR, EXE_NAME);
+  const exeFrom = path.join(APP_OUT_DIR, 'electron.exe');
+  const exeTo = path.join(APP_OUT_DIR, EXE_NAME);
   if (fs.existsSync(exeFrom)) {
     if (fs.existsSync(exeTo)) fs.rmSync(exeTo, { force: true });
     fs.renameSync(exeFrom, exeTo);
@@ -263,6 +302,30 @@ async function main() {
 
   const list = await asar.listPackage(asarPath);
   console.log('[make-portable] app.asar entries:', list.length);
+
+  // P-09: the swap helper runs as a real Node process, so it must live outside
+  // the asar (it is also packed inside for dev parity).
+  const helperSrc = path.join(APP_DIR, 'updater.cjs');
+  const helperDest = path.join(APP_OUT_DIR, 'resources', 'updater.cjs');
+  fs.copyFileSync(helperSrc, helperDest);
+  console.log('[make-portable] updater helper:', helperDest);
+
+  // Static manifest for the in-app update check. The release step uploads
+  // `app.asar` as an asset next to the portable zip; this file points at it.
+  const version = JSON.parse(fs.readFileSync(path.join(APP_DIR, 'package.json'), 'utf8')).version;
+  const asarBuf = fs.readFileSync(asarPath);
+  const manifest = {
+    version,
+    notes: '',
+    appAsar: {
+      url: `https://github.com/suianest/dsh-hud/releases/download/v${version}/app.asar`,
+      sha256: crypto.createHash('sha256').update(asarBuf).digest('hex'),
+      size: asarBuf.length,
+    },
+  };
+  fs.writeFileSync(path.join(ROOT, 'manifest.json'), JSON.stringify(manifest, null, 2) + '\n');
+  fs.writeFileSync(path.join(OUT_DIR, 'manifest.json'), JSON.stringify(manifest, null, 2) + '\n');
+  console.log('[make-portable] manifest.json:', manifest.appAsar.size, 'bytes,', manifest.appAsar.sha256.slice(0, 12) + '…');
   console.log('[make-portable] exe:', exeTo, fs.existsSync(exeTo) ? 'OK' : 'MISSING');
   console.log('[make-portable] app.asar:', asarPath, `${fs.statSync(asarPath).size} bytes`);
   }

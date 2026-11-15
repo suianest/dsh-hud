@@ -405,6 +405,14 @@ class HudWindow {
           this._openTokenWindow();
         },
       },
+      {
+        // P-09: in-app update, MVP scope (app.asar only, ~0.5 MB).
+        label: '检查更新',
+        click: () => {
+          this._log('menu: "检查更新" clicked');
+          this._checkUpdate().catch((err) => this._log('update check threw: ' + (err && err.message)));
+        },
+      },
       { type: 'separator' },
       {
         // 用户 2026-11-08：胶囊不再有 hover 关闭按钮，退出统一收进右键菜单。
@@ -458,6 +466,75 @@ class HudWindow {
   // A plain window (native frame, so it can be moved/closed normally) that
   // shows the DeepSeek usage/top-up page. Reuses one window: a second click
   // raises the existing one instead of stacking new copies.
+  /**
+   * P-09: check the static manifest, then download + stage the new asar and
+   * hand it to `updater.cjs` (a real Node process) right before quitting.
+   */
+  async _checkUpdate() {
+    const { dialog } = require('electron');
+    const updater = require('./updater');
+    const current = app.getVersion();
+    this._log('update: checking (current ' + current + ')');
+    const r = await updater.checkForUpdate({ current });
+    if (r.status === 'up-to-date') {
+      this._log('update: up to date (' + current + ')');
+      await dialog.showMessageBox(this.win, {
+        type: 'info',
+        message: '已是最新版本',
+        detail: '当前版本 v' + current,
+        buttons: ['好'],
+      });
+      return;
+    }
+    if (r.status === 'error') {
+      this._log('update: check failed: ' + r.error);
+      await dialog.showMessageBox(this.win, {
+        type: 'error',
+        message: '检查更新失败',
+        detail: String(r.error || ''),
+        buttons: ['好'],
+      });
+      return;
+    }
+    const ask = await dialog.showMessageBox(this.win, {
+      type: 'question',
+      message: '发现新版本 v' + r.latest,
+      detail: (r.notes ? r.notes + '\n\n' : '') + '只需下载约 0.5 MB 的界面包，重启后生效。',
+      buttons: ['下载并重启', '稍后'],
+      defaultId: 0,
+      cancelId: 1,
+    });
+    if (ask.response !== 0) return;
+
+    const staged = await updater.downloadUpdate(r, { destDir: path.join(app.getPath('userData'), 'update') });
+    this._log('update: staged ' + staged.staged + ' (' + staged.size + ' B)');
+    const pendingFile = path.join(app.getPath('userData'), 'update-pending.json');
+    updater.writePending({
+      pendingFile,
+      staged: staged.staged,
+      version: r.latest,
+      exe: process.execPath,
+      args: process.argv.slice(1),
+      asar: path.join(process.resourcesPath, 'app.asar'),
+    });
+    const helper = app.isPackaged
+      ? path.join(process.resourcesPath, 'updater.cjs')
+      : path.join(__dirname, '..', 'updater.cjs');
+    try {
+      spawn(process.execPath, [helper, pendingFile], {
+        detached: true,
+        stdio: 'ignore',
+        cwd: path.dirname(helper),
+        env: { ...process.env, ELECTRON_RUN_AS_NODE: '1' },
+      }).unref();
+      this._log('update: helper spawned');
+    } catch (err) {
+      this._log('update: helper spawn failed: ' + (err && err.message));
+      return;
+    }
+    app.quit();
+  }
+
   _openTokenWindow() {
     try {
       if (this._tokenWin && !this._tokenWin.isDestroyed()) {
@@ -1206,6 +1283,14 @@ class HudWindow {
     ipcMain.on('hud:resize-start', this._onResizeStart);
     ipcMain.on('hud:resize-move', this._onResizeMove);
     ipcMain.on('hud:resize-end', () => this._endEdgeResize(false));
+    this._onContextMenu = () => {
+      try {
+        Menu.buildFromTemplate(this.buildContextMenu()).popup({ window: this.win });
+      } catch (err) {
+        this._log('context menu failed: ' + (err && err.message));
+      }
+    };
+    ipcMain.on('hud:context-menu', this._onContextMenu);
     ipcMain.on('hud:palette-exec', this._onPaletteExec);
     ipcMain.on('hud:palette-close', this._onPaletteClose);
     ipcMain.on('hud:palette-open-request', this._onPaletteOpenRequest);
@@ -1238,6 +1323,7 @@ class HudWindow {
       { id: 'open-dsh-desktop', label: '打开 DSH 桌面窗口', run: () => this._openDshDesktop() },
       { id: 'open-dsh-panel', label: '打开 DSH 浮窗', run: () => this.showPanel() },
       { id: 'token-topup', label: 'Token 补充', run: () => this._openTokenWindow() },
+      { id: 'check-update', label: '检查更新', run: () => this._checkUpdate().catch(() => {}) },
     ];
     const items = builtin.slice();
     try {
@@ -1250,6 +1336,7 @@ class HudWindow {
     }
     this._paletteItems = new Map(items.map((it) => [it.id, it.run]));
     this._paletteOpen = true;
+    this._log('palette open request (toggling)');
     this.web.detach(); // hide the native view so the DOM palette is clickable
     if (this.win && !this.win.isDestroyed()) {
       this.win.webContents.send('hud:palette-open', {
@@ -1262,6 +1349,13 @@ class HudWindow {
     if (!this._paletteOpen) return;
     this._paletteOpen = false;
     this._paletteItems = null;
+    this._log('palette closed');
+    // Hide the DOM overlay as well: main can close the palette on its own
+    // (⌘ toggle / Ctrl+K / collapse), so the renderer would otherwise keep the
+    // panel visible above the re-attached view.
+    if (this.win && !this.win.isDestroyed()) {
+      try { this.win.webContents.send('hud:palette-close'); } catch { /* gone */ }
+    }
     // Re-attach the embedded view and give focus back to its input.
     if (this.web) {
       this.web.attach();
@@ -1350,6 +1444,7 @@ class HudWindow {
       ['hud:web-theme', this._onWebTheme],
       ['hud:resize-start', this._onResizeStart],
       ['hud:resize-move', this._onResizeMove],
+      ['hud:context-menu', this._onContextMenu],
       ['hud:palette-exec', this._onPaletteExec],
       ['hud:palette-close', this._onPaletteClose],
       ['hud:palette-open-request', this._onPaletteOpenRequest],

@@ -14,6 +14,9 @@
 // ---------------------------------------------------------------------------
 
 const fs = require('fs');
+
+// Payload version this build understands (see plugin/index.js PROTOCOL_VERSION).
+const PROTOCOL_VERSION = 1;
 const path = require('path');
 
 function _defaultDir() {
@@ -63,6 +66,12 @@ function cleanUrl(d) {
   }
 }
 
+// Protocol version the plugin wrote (null when an older plugin omitted it).
+function protocolVersion(d) {
+  if (!d || typeof d.protocolVersion !== 'number') return null;
+  return d.protocolVersion;
+}
+
 // Age of the discovery entry in ms (Infinity when unknown/unparseable).
 function ageMs(d) {
   if (!d || typeof d.updatedAt !== 'string') return Infinity;
@@ -80,4 +89,6 @@ function controlPath() {
   return path.join(path.dirname(p), 'control.json');
 }
 
-module.exports = { discoveryPath, readDiscovery, tokenUrl, cleanUrl, ageMs, controlPath };
+module.exports = {
+  PROTOCOL_VERSION,
+  protocolVersion, discoveryPath, readDiscovery, tokenUrl, cleanUrl, ageMs, controlPath };

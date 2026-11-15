@@ -141,6 +141,16 @@ function readLocalConfig() {
 // the separate DSH desktop app, instead of assuming this repo is present. Both
 // resolvers are pure (every path injectable) so they can be unit-tested and
 // printed with `node -e` without mounting a full Cordis host.
+// P-06: the packaged exe now lives in <root>/app/DSH HUD.exe (new layout); the
+// old layout had it flat at <root>/DSH HUD.exe. The portable root (where the
+// launcher and the writable udd/ live) is the parent of the app/ subdir in the
+// new layout, and the exe's own dir in the old one.
+function portableRootOf(exePath) {
+  const dir = path.dirname(exePath);
+  if (path.basename(dir).toLowerCase() === 'app') return path.dirname(dir);
+  return dir;
+}
+
 export function resolveHud(opts = {}) {
   const localAppData = opts.localAppData ?? process.env.LOCALAPPDATA ?? '';
   const repoRoot = opts.repoRoot ?? REPO_ROOT;
@@ -149,23 +159,29 @@ export function resolveHud(opts = {}) {
 
   if (exePath) {
     return existsSync(exePath)
-      ? { found: true, mode: 'exe', exe: exePath, dir: path.dirname(exePath) }
+      ? { found: true, mode: 'exe', exe: exePath, dir: path.dirname(exePath), root: portableRootOf(exePath) }
       : { found: false, mode: 'exe', reason: '未找到 HUD：exePath 指向的 exe 不存在（' + exePath + '）' };
   }
   if (hudDir) {
-    const exe = path.join(hudDir, 'DSH HUD.exe');
-    return existsSync(exe)
-      ? { found: true, mode: 'exe', exe, dir: hudDir }
-      : { found: false, mode: 'dir', reason: '未找到 HUD：hudDir 目录下没有 DSH HUD.exe（' + hudDir + '）' };
+    // P-06: new layout (<root>/app/DSH HUD.exe) first, then the old flat one.
+    const newExe = path.join(hudDir, 'app', 'DSH HUD.exe');
+    const oldExe = path.join(hudDir, 'DSH HUD.exe');
+    if (existsSync(newExe)) return { found: true, mode: 'exe', exe: newExe, dir: path.dirname(newExe), root: hudDir };
+    if (existsSync(oldExe)) return { found: true, mode: 'exe', exe: oldExe, dir: path.dirname(oldExe), root: hudDir };
+    return { found: false, mode: 'dir', reason: '未找到 HUD：hudDir 目录下没有 DSH HUD.exe（' + hudDir + '）' };
   }
 
   const candidates = [
+    // P-06: new layout (<root>/app/DSH HUD.exe) first, then the old flat one.
+    localAppData ? path.join(localAppData, 'DSH HUD', 'app', 'DSH HUD.exe') : '',
+    localAppData ? path.join(localAppData, 'Programs', 'DSH HUD', 'app', 'DSH HUD.exe') : '',
+    path.join(repoRoot, 'dist', 'win-unpacked', 'app', 'DSH HUD.exe'),
     localAppData ? path.join(localAppData, 'DSH HUD', 'DSH HUD.exe') : '',
     localAppData ? path.join(localAppData, 'Programs', 'DSH HUD', 'DSH HUD.exe') : '',
     path.join(repoRoot, 'dist', 'win-unpacked', 'DSH HUD.exe'),
   ];
   for (const exe of candidates) {
-    if (exe && existsSync(exe)) return { found: true, mode: 'exe', exe, dir: path.dirname(exe) };
+    if (exe && existsSync(exe)) return { found: true, mode: 'exe', exe, dir: path.dirname(exe), root: portableRootOf(exe) };
   }
 
   const devElectron = opts.devElectron ?? DEFAULT_ELECTRON;
@@ -256,6 +272,12 @@ export function apply(ctx, config = {}) {
     refreshMs: config.refreshMs ?? DEFAULT_REFRESH_MS,
     respawnDelayMs: config.respawnDelayMs ?? DEFAULT_RESPAWN_DELAY_MS,
     maxRespawns: config.maxRespawns ?? DEFAULT_MAX_RESPAWNS,
+    // "Follow DSH": bring the capsule up when the host starts. Uses the silent
+    // scheduled-task path, so it needs no click and cannot crash the host.
+    // `autostart.json` (the tray menu's on/off) still wins: opting out there
+    // means "do not start it behind my back", so we skip.
+    autoStartWithDsh:
+      config.autoStartWithDsh ?? envBool('DSH_HUD_AUTOSTART_WITH_DSH') ?? localConfig.autoStartWithDsh ?? true,
   };
 
   const dFile = discoveryFile();
@@ -387,7 +409,7 @@ export function apply(ctx, config = {}) {
     const tmp = discoveryTmpName();
     await writeFile(
       tmp,
-      JSON.stringify({ pid: d.pid, port: d.port, url: d.url, updatedAt: d.updatedAt }, null, 2),
+      JSON.stringify({ pid: d.pid, port: d.port, url: d.url, updatedAt: d.updatedAt, protocolVersion: PROTOCOL_VERSION }, null, 2),
       'utf8',
     );
     await renameWithRetry(tmp, dFile);
@@ -718,9 +740,9 @@ export function apply(ctx, config = {}) {
   if (commands && typeof commands.register === 'function') {
     unregisterCommand = commands.register({
       name: 'dsh-hud',
-      description: '打开或隐藏 DSH 悬浮胶囊（DSH HUD）',
-      input: { hint: 'toggle | show | hide | reload（留空 = toggle）' },
-      handler: ({ rawInput = '' }) => {
+      description: '开关 DSH 悬浮胶囊（DSH HUD）：on 启动 / off 退出 / status 查看',
+      input: { hint: 'on | off | status | toggle | show | hide | reload（留空 = toggle）' },
+      handler: async ({ rawInput = '' }) => {
         if (disposed) return { kind: 'error', text: 'DSH HUD 插件已卸载' };
         // Only manage the child when spawnApp is enabled; under the default the
         // HUD self-starts and this command just writes control.json for it.
@@ -739,10 +761,45 @@ export function apply(ctx, config = {}) {
             : '且未找到 HUD（请设置 hudDir 或 DSH_HUD_DIR）';
         const note = (okText, failText) => ({
           kind: 'success',
-          text: hudRunning() ? okText : failText,
+          text:
+            (hudRunning() ? okText : failText) +
+            (hudRunning() && firstRunAutostart ? '（首次运行已自动添加开机启动与开始菜单快捷方式，可在右键菜单关闭）' : ''),
         });
         // 扩展点 2：非内置动作原样透传给 control.json，由 app 侧
         // extensions.registerControlAction 注册的 handler 处理。
+        if (action === 'on') {
+          if ((await hudProcessCount()) > 0) {
+            sendControl('show');
+            visible = true;
+            return { kind: 'success', text: 'DSH 浮窗已打开（进程已在运行）' };
+          }
+          const ok = await startHudViaTask();
+          visible = ok;
+          return ok
+            ? { kind: 'success', text: 'DSH HUD 已启动' }
+            : { kind: 'error', text: '启动失败：没有找到打包版 HUD，或计划任务不可用（详见插件诊断日志）' };
+        }
+        if (action === 'off') {
+          if ((await hudProcessCount()) <= 0) return { kind: 'success', text: 'DSH HUD 未在运行' };
+          sendControl('quit');
+          for (let i = 0; i < 8; i += 1) {
+            await sleep(300);
+            if ((await hudProcessCount()) <= 0) break;
+          }
+          if ((await hudProcessCount()) > 0) {
+            return { kind: 'error', text: '已发送退出指令，但进程仍在（可手动结束 DSH HUD.exe）' };
+          }
+          visible = false;
+          return { kind: 'success', text: 'DSH HUD 已关闭' };
+        }
+        if (action === 'status') {
+          const n = await hudProcessCount();
+          const where = hud.found ? hud.exe : '未找到安装目录';
+          return {
+            kind: n > 0 ? 'success' : 'info',
+            text: (n > 0 ? `运行中（${n} 个进程）` : '未运行') + ' · ' + where,
+          };
+        }
         const builtins = ['show', 'hide', 'reload', 'toggle'];
         if (action && !builtins.includes(action)) {
           sendControl(action);
@@ -802,8 +859,32 @@ export function apply(ctx, config = {}) {
         await applyAutostart(true).catch((err) => log('autostart reconcile failed:', err?.message ?? err));
       } else if (wantAutostart === false) {
         await applyAutostart(false).catch(() => {});
+      } else if (packagedLauncher() && process.env.DSH_HUD_NO_AUTOSTART !== '1') {
+        // P-07: a fresh plugin-only install has no cookie and no shortcut, so
+        // without this the capsule would never appear at logon. Install once,
+        // then record the decision so a later "off" is never overridden.
+        await installFirstRunAutostart().catch((err) => log('autostart first-run failed:', err?.message ?? err));
+    await ensureLaunchTask().catch((err) => log('launch task setup failed:', err?.message ?? err));
       }
+      // P-08: the HUD cannot write %APPDATA%\Roaming itself (Low IL), so the
+      // Medium-IL host owns the Start-menu shortcut as well.
+      await ensureStartMenuShortcut().catch((err) =>
+        log('start-menu shortcut failed:', err?.message ?? err),
+      );
+      // Legacy opt-in path first: it starts the dev checkout synchronously.
       if (cfg.spawnApp) ensureRunning();
+      // "Follow DSH" (packaged installs only): the scheduled task is the one
+      // launcher that neither crashes the host nor needs a click.
+      if (cfg.autoStartWithDsh && !cfg.spawnApp && packagedLauncher()) {
+        if (autostartDesired() === false) {
+          log('auto-start with DSH skipped (user turned autostart off)');
+        } else if ((await hudProcessCount()) > 0) {
+          log('capsule already running; skip auto-start');
+        } else {
+          const started = await startHudViaTask().catch(() => false);
+          log(started ? 'auto-started with DSH' : 'auto-start with DSH failed (task unavailable)');
+        }
+      }
     } catch (err) {
       log('discovery write failed:', err?.message ?? err);
     }
@@ -833,6 +914,10 @@ export function apply(ctx, config = {}) {
   // command; replaying it would e.g. steal focus minutes later.
   const IPC_REQUEST_TTL_MS = 120_000;
 
+// Incremented whenever discovery/control payloads change shape. The HUD compares
+// this against its own expectation and only warns on a mismatch (never blocks).
+const PROTOCOL_VERSION = 1;
+
   // --- autostart (dev builds) ---------------------------------------------
   // The HUD runs at Low IL and cannot write the user's Startup folder, but this
   // host is Medium. The HUD therefore drops autostart.json next to its
@@ -857,7 +942,7 @@ export function apply(ctx, config = {}) {
   const packagedLauncher = () => {
     // A packaged Release folder can now come from hudDir/exePath or any of the
     // standard install locations, not just <repo>/dist/win-unpacked (t36 P-02).
-    if (hud.mode === 'exe') return { exe: hud.exe, udd: path.join(hud.dir, 'udd') };
+    if (hud.mode === 'exe') return { exe: hud.exe, udd: path.join(hud.root ?? hud.dir, 'udd') };
     return null;
   };
   const autostartScript = () => {
@@ -908,6 +993,153 @@ export function apply(ctx, config = {}) {
     }
     return readAutostartCookie(path.join(hudUserDataDir(), 'autostart.json'));
   };
+
+  // P-07: install the logon entry exactly once for a packaged install, then
+  // leave an explicit cookie next to its user-data so the tray menu wins later.
+  let firstRunAutostart = null;
+  async function installFirstRunAutostart() {
+    const packaged = packagedLauncher();
+    if (!packaged) return null;
+    const file = await applyAutostart(true);
+    const cookie = path.join(packaged.udd, 'autostart.json');
+    await mkdir(packaged.udd, { recursive: true });
+    await writeFile(
+      cookie,
+      JSON.stringify({ enabled: true, by: 'plugin-first-run', at: new Date().toISOString() }, null, 2) + '\n',
+      'utf8',
+    );
+    firstRunAutostart = file;
+    log('autostart first-run installed:', file, 'cookie:', cookie);
+    return file;
+  }
+
+  // P-08: the HUD cannot create this itself. Started from the desktop it runs
+  // at Low Mandatory Level, and saving a .lnk under %APPDATA%\Roaming fails
+  // with E_ACCESSDENIED (0x80070005). This host is Medium, so it does the one
+  // write; the HUD keeps its own attempt as a fallback for Medium launches.
+  const startMenuLink = () =>
+    path.join(process.env.APPDATA || '', 'Microsoft', 'Windows', 'Start Menu', 'Programs', 'DSH HUD.lnk');
+  // Users look for the app on the desktop first, so install both links (P-08).
+  const desktopLink = () => {
+    const home = process.env.USERPROFILE || '';
+    const oneDrive = path.join(home, 'OneDrive', 'Desktop');
+    return {
+      candidates: [path.join(home, 'Desktop', 'DSH HUD.lnk'), path.join(oneDrive, 'DSH HUD.lnk')],
+    };
+  };
+  const psQuote = (s) => String(s).replace(/'/g, "''");
+  const runPowerShell = (command, timeoutMs = 15_000) =>
+    new Promise((resolve) => {
+      let out = '';
+      let done = false;
+      const finish = (code) => {
+        if (done) return;
+        done = true;
+        resolve({ code, out: out.trim() });
+      };
+      try {
+        const child = spawn(
+          'powershell.exe',
+          ['-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-Command', command],
+          { windowsHide: true, stdio: ['ignore', 'pipe', 'pipe'] },
+        );
+        child.stdout.on('data', (b) => { out += b.toString(); });
+        child.stderr.on('data', (b) => { out += b.toString(); });
+        child.on('error', (err) => { out += String(err?.message ?? err); finish(-1); });
+        child.on('close', (code) => finish(code ?? -2));
+        setTimeout(() => { try { child.kill(); } catch { /* ignore */ } finish(-3); }, timeoutMs);
+      } catch (err) {
+        out += String(err?.message ?? err);
+        finish(-4);
+      }
+    });
+  let startMenuLinkInstalled = null;
+  async function ensureStartMenuShortcut() {
+    if (process.env.DSH_HUD_NO_STARTMENU === '1') return null;
+    const packaged = packagedLauncher();
+    if (!packaged) return null;
+    const link = startMenuLink();
+    const links = [link];
+    // Desktop: prefer the folder that already exists (OneDrive-redirected
+    // desktops are common on Windows 11).
+    const desk = desktopLink().candidates.find((p) => existsSync(path.dirname(p)));
+    if (desk) links.push(desk);
+    if (links.every((p) => existsSync(p))) return link;
+    await mkdir(path.dirname(link), { recursive: true });
+    const args = '--no-sandbox --user-data-dir="' + packaged.udd + '"';
+    const ps = [
+      "$ErrorActionPreference = 'Stop';",
+      '$ws = New-Object -ComObject WScript.Shell;',
+      "foreach ($p in @('" + links.map(psQuote).join("','") + "')) {",
+      '  $lnk = $ws.CreateShortcut($p);',
+      "  $lnk.TargetPath = '" + psQuote(packaged.exe) + "';",
+      "  $lnk.Arguments = '" + psQuote(args) + "';",
+      "  $lnk.WorkingDirectory = '" + psQuote(path.dirname(packaged.exe)) + "';",
+      "  $lnk.IconLocation = '" + psQuote(packaged.exe + ',0') + "';",
+      "  $lnk.Description = 'DSH HUD';",
+      '  $lnk.Save();',
+      '}',
+    ].join(' ');
+    const { code, out } = await runPowerShell(ps);
+    if (code === 0) {
+      startMenuLinkInstalled = link;
+      log('start-menu shortcut installed:', link);
+      return link;
+    }
+    log('start-menu shortcut failed:', out || 'exit ' + code);
+    return null;
+  }
+
+  // --- launch task (on/off from DSH) ---------------------------------------
+  // The DSH host cannot spawn Electron: the child dies at 0x80000003 while
+  // Chromium sets up its crashpad/mojo pipes, and going through explorer
+  // pops a manual "allow" prompt. A per-user scheduled task runs outside this
+  // process tree with the normal token, so Start-ScheduledTask is silent
+  // (verified 2026-11-13). `off` uses the control channel's quit action.
+  const LAUNCH_TASK = 'dsh-hud-launch';
+  let launchTaskReady = false;
+  const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+
+  async function ensureLaunchTask() {
+    if (process.env.DSH_HUD_NO_LAUNCH_TASK === '1') return false;
+    const packaged = packagedLauncher();
+    if (!packaged) return false;
+    const ps = [
+      "$ErrorActionPreference = 'Stop';",
+      'try {',
+      "$a = New-ScheduledTaskAction -Execute '" + psQuote(packaged.exe) + "'",
+      "  -Argument '--no-sandbox --user-data-dir=\"" + psQuote(packaged.udd) + "\"'",
+      "  -WorkingDirectory '" + psQuote(path.dirname(packaged.exe)) + "';",
+      '$t = New-ScheduledTaskTrigger -Once -At (Get-Date).AddYears(1);',
+      "Register-ScheduledTask -TaskName '" + LAUNCH_TASK + "' -Action $a -Trigger $t -Force | Out-Null;",
+      "'ok'",
+      "} catch { [Console]::Error.WriteLine($_.Exception.Message); exit 1 }",
+    ].join(' ');
+    const { code, out } = await runPowerShell(ps, 20_000);
+    launchTaskReady = code === 0;
+    log(launchTaskReady ? 'launch task ready: ' + LAUNCH_TASK : 'launch task failed: ' + (out || 'exit ' + code));
+    return launchTaskReady;
+  }
+
+  async function hudProcessCount() {
+    const { code, out } = await runPowerShell(
+      "(Get-Process -Name 'DSH HUD' -ErrorAction SilentlyContinue | Measure-Object).Count",
+    );
+    if (code !== 0) return -1;
+    const n = Number.parseInt(out.trim(), 10);
+    return Number.isFinite(n) ? n : -1;
+  }
+
+  async function startHudViaTask() {
+    if (!launchTaskReady && !(await ensureLaunchTask())) return false;
+    const { code } = await runPowerShell("Start-ScheduledTask -TaskName '" + LAUNCH_TASK + "'; 'ok'", 20_000);
+    if (code !== 0) return false;
+    for (let i = 0; i < 10; i += 1) {
+      await sleep(600);
+      if ((await hudProcessCount()) > 0) return true;
+    }
+    return false;
+  }
 
   async function runFocusHelper() {
     const script = path.join(cfg.appDir, 'scripts', 'focus-dsh.ps1');

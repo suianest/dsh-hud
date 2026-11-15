@@ -31,6 +31,7 @@
   const palette = document.getElementById('palette');
   const paletteInput = document.getElementById('palette-input');
   const paletteList = document.getElementById('palette-list');
+  const paletteBackdrop = document.getElementById('palette-backdrop');
   const capsuleIcon = document.getElementById('capsule-drag');
 
   function reportWebBounds() {
@@ -252,6 +253,15 @@
   // 真正的动作 handler 都在主进程（hud.paletteExec 发 id 回去）。
   panelCommand.addEventListener('click', () => hud.paletteOpen());
 
+  // Right-click anywhere on the shell opens the same menu the capsule uses, so
+  // "打开 DSH 桌面窗口 / Token 补充 / 检查更新 / 开机自启" are reachable from
+  // the panel too (the embedded view has its own context menu, that is fine).
+  document.addEventListener('contextmenu', (event) => {
+    if (!hud.openMenu) return;
+    event.preventDefault();
+    hud.openMenu();
+  });
+
   let paletteAll = [];       // 全部条目 [{id,label}]
   let paletteRendered = [];  // 当前过滤后 [{id,label}]
   let paletteSelected = 0;
@@ -285,6 +295,7 @@
     paletteAll = (payload && Array.isArray(payload.items)) ? payload.items : [];
     paletteSelected = 0;
     if (palette) palette.hidden = false;
+    if (paletteBackdrop) paletteBackdrop.hidden = false;
     if (paletteInput) paletteInput.value = '';
     renderPalette();
     if (paletteInput) paletteInput.focus();
@@ -292,6 +303,7 @@
 
   function closePalette() {
     if (palette) palette.hidden = true;
+    if (paletteBackdrop) paletteBackdrop.hidden = true;
     if (paletteInput) paletteInput.value = '';
     if (paletteList) paletteList.textContent = '';
     paletteAll = [];
@@ -326,6 +338,7 @@
   }
 
   hud.onPaletteOpen((payload) => openPalette(payload));
+  if (hud.onPaletteClose) hud.onPaletteClose(() => closePalette());
 
   hud.onTheme((theme) => {
     // Drive CSS variables via html[data-hud-theme="light"|"dark"] (t34). Absence

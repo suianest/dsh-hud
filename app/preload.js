@@ -15,6 +15,8 @@ contextBridge.exposeInMainWorld('hud', {
 
   // Actions.
   collapse: () => ipcRenderer.send('hud:collapse'),
+  // Right-click on the shell: show the same context menu as the capsule.
+  openMenu: () => ipcRenderer.send('hud:context-menu'),
   quit: () => ipcRenderer.send('hud:quit'),
 
   // Collapse animation handshake: main asks the renderer to play the out
@@ -52,6 +54,10 @@ contextBridge.exposeInMainWorld('hud', {
     ipcRenderer.on('hud:palette-open', (_event, payload) => callback(payload));
   },
   paletteOpen: () => ipcRenderer.send('hud:palette-open-request'),
+  // Main closes the palette (⌘ toggle / Ctrl+K / collapse); keep the DOM in sync.
+  onPaletteClose: (callback) => {
+    ipcRenderer.on('hud:palette-close', () => callback());
+  },
   paletteExec: (id) => ipcRenderer.send('hud:palette-exec', { id }),
   paletteClose: () => ipcRenderer.send('hud:palette-close'),
 });

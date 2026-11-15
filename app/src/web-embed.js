@@ -23,7 +23,7 @@ const path = require('path');
 const fs = require('fs');
 
 const { WEB_PARTITION } = require('./constants');
-const { readDiscovery, tokenUrl, cleanUrl, ageMs } = require('./discovery');
+const { readDiscovery, tokenUrl, cleanUrl, ageMs, protocolVersion, PROTOCOL_VERSION } = require('./discovery');
 const { getCompactCss } = require('./compact-css');
 
 const WEB_PRELOAD = path.join(__dirname, '..', 'renderer', 'web-preload.js');
@@ -194,6 +194,9 @@ class WebEmbed {
       // and only renders the conversation header after the user enters a
       // session, which can happen minutes later. Dev-only, cheap, and it stops
       // on its own (30 samples x 10s).
+      // Sample once right away: in capture mode the app quits a few seconds
+      // after the screenshot, well before the first 10s tick.
+      try { this._maybeDumpTopRight(wc); } catch { /* detached */ }
       let samples = 0;
       const timer = setInterval(() => {
         samples += 1;
@@ -379,6 +382,15 @@ class WebEmbed {
 
   load({ forceToken = false } = {}) {
     if (!this.view) this.create();
+    // P-02: a plugin from a newer/older release may write a different payload
+    // shape. Warn (once per value) but never block the load — the URL contract
+    // has been stable since v0.2, so the mismatch is informational.
+    const d0 = readDiscovery();
+    const pv = d0 ? protocolVersion(d0) : null;
+    if (pv !== null && pv !== PROTOCOL_VERSION && this._protocolWarned !== pv) {
+      this._protocolWarned = pv;
+      console.warn(`[hud] plugin protocol v${pv} differs from expected v${PROTOCOL_VERSION}; continuing`);
+    }
     const target = this._resolveTarget(forceToken);
     if (!target) {
       this.showError('unreachable', '未找到 discovery.json（DSH 服务可能未启动）');

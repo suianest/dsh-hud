@@ -60,6 +60,7 @@ const HudWindow = require('./src/hud-window');
 const autostart = require('./src/autostart');
 const { ControlBridge } = require('./src/control');
 const extensions = require('./src/extensions');
+const shortcut = require('./src/shortcut');
 
 // Keep all profile/crashpad writes inside a known dir. Defaults to the OS
 // standard (%APPDATA%\<app name>); override for sandboxed/dev runs. When the
@@ -129,6 +130,17 @@ if (!gotLock) {
     // 开机自启：应用用户持久化的选择（首次运行/无配置文件时不触碰）。
     autostart.apply();
 
+    // 开始菜单入口（P-08）：插件形态没有桌面快捷方式，关掉自启后需要可点
+    // 的入口；只在打包版首次运行时创建一次，失败仅记日志。
+    try {
+      shortcut.ensureStartMenuShortcut({
+        isPackaged: app.isPackaged,
+        log: (line) => bootLog(line),
+      });
+    } catch (err) {
+      bootLog(`[hud] start-menu shortcut crashed: ${(err && err.message) || err}`);
+    }
+
     // 外部扩展（P-03）：exe 同级 extensions/ 与 userData/extensions/ 下的
     // *.js 会在建窗前加载，注册进 menu / control / css 三个扩展点。
     // 只读本地文件；出错只记日志，绝不影响启动。DSH_HUD_NO_EXTENSIONS=1 可关。
@@ -159,6 +171,8 @@ if (!gotLock) {
         show: () => { if (hud) hud.showPanel(); },
         hide: () => { if (hud) hud.showCapsule(); },
         reload: () => { if (hud) hud.reloadWeb(); },
+        // /dsh-hud off → graceful exit (plugin waits for the process to go away).
+        quit: () => { app.quit(); },
       },
       { statePath: path.join(app.getPath('userData'), 'control-state.json') }
     );
@@ -237,6 +251,17 @@ function runCaptureFlow(hud) {
   const capturePanel = async () => {
     if (done) return;
     done = true;
+    // DSH_HUD_CAPTURE_PALETTE=1: open the command palette first so the shell
+    // screenshot shows the real overlay (dev aid only, off by default).
+    const withPalette = process.env.DSH_HUD_CAPTURE_PALETTE === '1';
+    if (withPalette) {
+      try {
+        hud._openPalette();
+        await delay(700);
+      } catch (err) {
+        console.error('[hud] palette capture open failed:', err && err.message);
+      }
+    }
     try {
       const shellImg = await hud.win.webContents.capturePage();
       writeCapture(paths.panelShell, shellImg.toPNG());
@@ -246,6 +271,9 @@ function runCaptureFlow(hud) {
       }
     } catch (err) {
       console.error('[hud] panel capture failed:', err && err.message);
+    }
+    if (withPalette) {
+      try { hud._closePalette(); } catch { /* ignore */ }
     }
     await captureCapsule();
   };

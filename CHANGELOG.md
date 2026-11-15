@@ -11,33 +11,52 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- **检查更新在部分网络下打不开**：`manifest.json` 改为按顺序尝试 raw / jsDelivr / Release 资产 / GitHub REST API 四条源，前一条失败自动换下一条，全失败时错误信息列出每条原因。
+
+## [0.4.0] - 2026-11-13
+
+包布局调整 + 首次运行体验 + 应用内更新 + UI 打磨。**从 0.3.0 起请从 Release 页下载新包。**
+
 ### Added
 
-- 外部扩展目录（P-03，`docs/extending.md`）：`<exe>/extensions/*.js` 与
-  `%LOCALAPPDATA%\DSH HUD\extensions\*.js` 启动时自动加载，支持函数式与
-  `activate(api)` 两种导出、`protocolVersion` 校验、`DSH_HUD_NO_EXTENSIONS=1` 关闭。
-- `make-portable.js` 现在会额外产出 `dist/DSH-HUD-<version>-win-x64.zip`（`--no-zip` 可跳过），
-  打 zip 前会临时摘掉 IPC junction，避免把仓库目录卷进包里。
-- 发布文档：`docs/release.md`、`.github/ISSUE_TEMPLATE/` 两个模板、本文件。
+- **应用内更新（P-09）**：右键菜单 / 命令面板里的「检查更新」。读取仓库根 `manifest.json`，
+  只下载 `app.asar`（约 0.5 MB），sha256 校验后写入 `userData/update/app.asar.new` 与
+  `update-pending.json`，由 `app/resources/updater.cjs` 等文件锁释放后替换（保留 `app.asar.bak`）
+  并重启。运行时永不替换 `DSH HUD.exe`。
+- **首次运行自动装开机启动（P-07）**：插件首次定位到打包版 HUD 且没有 `autostart.json` 时，
+  自动写 `Startup\dsh-hud.cmd` 并记 `{enabled:true, by:"plugin-first-run"}`；菜单关掉后不会再装回。
+  `DSH_HUD_NO_AUTOSTART=1` 可关。
+- **开始菜单快捷方式（P-08）**：插件首次运行同时创建 `%APPDATA%\...\Programs\DSH HUD.lnk`
+  （HUD 进程是低完整性，写不了该目录，所以由 Medium 权限的插件代建）。
+- **外部扩展目录（P-03）**：`<exe>/extensions/*.js` 与 `%LOCALAPPDATA%\DSH HUD\extensions\*.js`
+  在启动时加载，支持函数导出与 `activate(api)`，`protocolVersion` 不匹配跳过，
+  `DSH_HUD_NO_EXTENSIONS=1` 关闭。详见 `docs/extending.md`。
+- **`discovery.json` 增加 `protocolVersion`（P-02）**：HUD 读到不匹配的值只记一条警告、不阻塞加载（插件版本 1.1.0）。
+- **面板右键菜单**：面板任意位置右键 = 胶囊菜单（打开桌面窗口 / Token 补充 / 检查更新 / 退出 / 开机自启）。
+- **跟随 DSH 启动**：DSH 一启动就通过计划任务把胶囊拉起来（静默、无确认）；右键菜单关掉「开机自启」或不想要时设 `DSH_HUD_AUTOSTART_WITH_DSH=0`。
+- **在 DSH 里开关胶囊**：`/dsh-hud on` 启动（计划任务 `dsh-hud-launch`，无需人工确认）、`off` 退出、`status` 查看。
 
 ### Changed
 
-- 首次启动且没有 `theme.json` 缓存时，用系统浅/深色偏好作为初始主题（L1：不再先画深色再闪成浅色）。
-- `plugin.test.mjs` 的临时目录清理改为对 `ENOTEMPTY/EBUSY/EPERM` 退避重试（M1：消掉偶发红）。
-- 单测命令统一加 `--test-force-exit`：`main-boot` 用例结束后仍有 stdin/文件监听句柄，
-  进程不自己退出（不影响被测行为，只影响 CI 的退出码）。
-- 命令面板快捷键改为切换：再按一次 Ctrl+K 收起（此前只能打开）。
-
-- 回退 660×900 鲸鱼边框实验：面板恢复 520×720，窗口尺寸、卡片圆角、透明外边距一并还原，
-  字号与间距回到 0.3.0 的取值（`app/src/constants.js`、`app/renderer/hud.css`）。
+- **便携包布局（P-06）**：Electron 运行时（exe/resources/dll/locales）挪进 `dist/win-unpacked/app/`，
+  根目录只剩 `DSH HUD.lnk`、`启动 DSH HUD.cmd`、`README.txt`、`udd/`。插件探测路径同步支持新旧两种布局。
+- **UI 打磨**：标题栏 48px + 发丝分隔线；面板按钮 28×28、按下缩放、键盘焦点环；内容区留白 12px；
+  命令面板加半透明背板、选中项主题蓝 + 左侧强调条、底部快捷键提示、输入框 15px、圆角 16px。
+- 命令面板遮罩移进卡片内部，跟随窗口 22px 圆角裁切，不再露出直角暗块。
 
 ### Fixed
 
-- 拖动：鼠标在窗口外释放时收不到 `mouseup`，窗口会一直跟随光标；现在按 `MouseEvent.buttons`
-  判定按键已松开并结束拖动（`app/renderer/hud.js` 的 `mousemove` 处理器）。
-- 拖动：按钮上的 `mousedown` 冒泡进拖拽处理器，按住「收起 / 关闭」移动会意外拖动窗口，
-  单击也可能留下未闭合的拖拽会话；现在只在非交互子元素上启动拖动，面板标题栏交给原生
-  `-webkit-app-region: drag`，手动拖拽只绑胶囊图标。
+- **命令面板关不掉**：背板会吞掉标题栏按钮点击，且主进程关闭面板时没有通知渲染层。
+  现在背板 `pointer-events: none`，`_closePalette()` 会发 `hud:palette-close` 同步隐藏 DOM。
+- **命令面板误关**：移除「点空白处关闭」，现在只有 ⌘/Ctrl+K、Esc、执行命令三种关闭方式。
+- **内嵌页左上角侧栏按钮被裁（P-10）**：`compact-css.js` 新增 C10，把 `[data-sidebar-toggle]`
+  下移 14px 回到自己的行内。
+- **拖边缩放时长按持续变大**：缩放改用渲染层 pointer delta，交叉轴锁 session 快照，
+  不再从 `getBounds()` 回读被 Windows 隐藏边框污染的尺寸。
+- **首启闪深色（L1）**：`_loadTheme()` 在 `theme.json` 缺失时回退 `nativeTheme.shouldUseDarkColors`。
+
 
 ## [0.3.0] - 2026-11-09
 
