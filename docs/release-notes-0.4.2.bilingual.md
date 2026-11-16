@@ -18,12 +18,12 @@ An audit-driven fix release: one blocker, four highs and two mediums from the co
 1. 下载 `DSH-HUD-0.4.2-win-x64.zip`（约 151 MB）并解压到有写权限的目录。
 2. **双击目录里的 `DSH HUD.lnk`**（不要双击 `app\DSH HUD.exe`，它必须带启动参数）。
 3. 想接进 DSH：DSH → 设置 → 插件 → 添加插件 → 填 `dsh-hud-capsule`，重启 DSH 即可；也能在 DSH 里用 `/dsh-hud on|off|status` 开关胶囊。
-4. 一键安装（可选）：下载 `安装 DSH HUD.cmd` 双击，脚本会自己下载、解压、问你要不要启动。
+4. 一键安装（可选）：下载 `install-dsh-hud.cmd` 双击，脚本会自己下载、解压、问你要不要启动。
 
 1. Download and unzip `DSH-HUD-0.4.2-win-x64.zip` into a writable folder.
 2. **Double-click `DSH HUD.lnk`** — never `app\DSH HUD.exe` (it needs the flags from the shortcut).
 3. Optional: add the plugin inside DSH with the package name `dsh-hud-capsule`, then use `/dsh-hud on|off|status`.
-4. One-click install: run `安装 DSH HUD.cmd` (the file name is Chinese, it just starts the installer); it downloads, unzips, and offers to launch.
+4. One-click install: run `install-dsh-hud.cmd`; it downloads, unzips, and offers to launch.
 
 ## 校验 / Verify
 

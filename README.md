@@ -48,7 +48,7 @@ Windows 常驻悬浮胶囊 + 520×720 紧凑面板（豆包式）。点胶囊或
 
 | 路线 | 适合谁 | 怎么做 | 应用包 |
 |---|---|---|---|
-| **A · 便携版** | 只要桌面胶囊，不想碰插件 | 下载 `安装 DSH HUD.cmd` 双击，或解压 zip 后双击 `DSH HUD.lnk` | 安装器自动下载 |
+| **A · 便携版** | 只要桌面胶囊，不想碰插件 | 下载 `install-dsh-hud.cmd` 双击，或解压 zip 后双击 `DSH HUD.lnk` | 安装器自动下载 |
 | **B · GitHub 仓库装插件** | 有 git、想用仓库版（推荐开发者） | DSH 添加插件填 `github:suianest/dsh-hud`（或本地目录 `D:\...\dsh-hud`） | 插件首次运行自动下载 |
 | **C · npm 包名装插件** | 只想填一个名字（等发布） | 填 `dsh-hud-capsule` | 插件首次运行自动下载 |
 
@@ -61,8 +61,8 @@ Windows 常驻悬浮胶囊 + 520×720 紧凑面板（豆包式）。点胶囊或
 **一键安装（推荐）**
 
 1. 下载安装器（几百字节，二选一）：
-   - [最新 Release](https://github.com/suianest/dsh-hud/releases/latest) 的附件 `安装 DSH HUD.cmd`；
-   - 或在仓库里打开 `installer/安装 DSH HUD.cmd` → 右上角 **Raw** / 下载按钮（Release 附件漏传时用这条）。
+   - [最新 Release](https://github.com/suianest/dsh-hud/releases/latest) 的附件 `install-dsh-hud.cmd`；
+   - 或在仓库里打开 `installer/安装 DSH HUD.cmd`（内容相同，只是 Release 里用了英文文件名）→ 右上角 **Raw**。
 2. 双击它。脚本会自动建目录、下载约 151 MB 安装包、校验 SHA-256、解压到 `%LOCALAPPDATA%\DSH HUD`，最后告诉你装在哪并问要不要现在启动。
 3. 想装到别的盘：`powershell -ExecutionPolicy Bypass -File install-dsh-hud.ps1 -InstallDir "D:\Apps\DSH HUD"`；离线时加 `-ZipPath "手动下载的zip"`。
 

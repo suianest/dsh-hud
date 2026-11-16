@@ -84,7 +84,7 @@ pnpm add dsh-hud-capsule
 ## 现在能用的两条路
 
 - **本地目录**：DSH → 添加插件 → 填 `D:\DeepSeekData\workspace\dsh-hud\plugin`（需要本机有仓库）。
-- **便携版**：从 Release 下载 zip（或用 `installer\安装 DSH HUD.cmd` 一键装），双击 `DSH HUD.lnk`。
+- **便携版**：从 Release 下载 zip（或用 Release 里的 `install-dsh-hud.cmd` 一键装，仓库内同名文件为 `installer/安装 DSH HUD.cmd`），双击 `DSH HUD.lnk`。
 
 ## 附：git 已就位
 
