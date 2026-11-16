@@ -785,3 +785,35 @@ test('the palette shortcut toggles: pressing it again closes the palette (2026-1
   assert.equal(hud._paletteOpen, false, 'toolbar button toggles closed');
   hud.destroy();
 });
+
+// ---------------------------------------------------------------------------
+// Anti-flash: the window is resized before the renderer repaints, so a mode
+// switch must hold the window invisible until the new frame is on screen.
+// ---------------------------------------------------------------------------
+test('expanding from capsule holds opacity until the renderer paints (2026-11-16)', () => {
+  const ctx = setup({ discovery: freshDiscovery() });
+  const { hud, win } = boot(ctx);
+
+  hud.showCapsule();
+  win.opacity = 1;
+  win.opacityCalls.length = 0;
+
+  hud.showPanel();
+  assert.equal(hud.mode, 'panel');
+  assert.equal(win.opacity, 0, 'window must stay hidden while the old layout is on screen');
+
+  ctx.mock.ipcMain.emit('hud:painted', {});
+  assert.equal(win.opacity, 1, 'paint ack reveals the window');
+});
+
+test('the reveal falls back to a timer if the paint ack never arrives', async () => {
+  const ctx = setup({ discovery: freshDiscovery() });
+  const { hud, win } = boot(ctx);
+
+  hud.showCapsule();
+  hud.showPanel();
+  assert.equal(win.opacity, 0);
+
+  await delay(220);
+  assert.equal(win.opacity, 1, 'fallback timer must never leave the window invisible');
+});

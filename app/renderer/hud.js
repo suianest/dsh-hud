@@ -350,8 +350,15 @@
     document.documentElement.dataset.hudTheme = theme === 'light' ? 'light' : 'dark';
   });
 
+  let paintedMode = null;
   hud.onState((state) => {
     setMode(state.mode);
     body.classList.toggle('opaque', !!state.opaque);
+    if (state.mode !== paintedMode) {
+      paintedMode = state.mode;
+      // Two rAFs: the first lands the class change, the second guarantees the
+      // browser has painted that frame before main clears the opacity hold.
+      requestAnimationFrame(() => requestAnimationFrame(() => hud.painted()));
+    }
   });
 })();

@@ -74,6 +74,8 @@ class HudWindow {
     this.hotkey = null; // hotkey controller (src/hotkeys.js)
     this._animatingOut = false; // true while the panel plays its collapse animation
     this._collapseTimer = null; // fallback timer for the collapse animation
+    this._revealPending = false; // capsule<->panel switch is waiting for a paint
+    this._revealTimer = null; // fallback timer for the paint handshake
     this.web = null; // WebEmbed (embedded DSH Web UI, t6)
     this._webBounds = null; // last #web-host rect from the shell renderer
     this._rightbarOpen = false; // DSH page's right column is expanded
@@ -172,6 +174,9 @@ class HudWindow {
     const wasPanel = this.mode === 'panel';
     this.mode = 'capsule'; // set FIRST so the blur handler won't re-enter
     const pos = this._capsulePosition();
+    // 面板→胶囊：窗口尺寸先变、内容还是面板布局，会闪一帧面板（2026-11-16）。
+    // 先清零不透明度，等 renderer 画出胶囊那一帧再显示。
+    if (wasPanel) this._holdReveal();
 
     if (wasPanel && releaseFocus) {
       // 焦点策略(收起)：hide() 让 Windows 把前台焦点还给 Z 序里的上一个
@@ -187,6 +192,7 @@ class HudWindow {
 
     this._hideWeb();
     this._emitState();
+    if (wasPanel) this._armReveal();
   }
 
   showPanel() {
@@ -203,8 +209,11 @@ class HudWindow {
       this._emitState();
       return;
     }
+    const expanding = this.mode !== 'panel';
     this.mode = 'panel';
     const pos = this._panelPosition(this._panelSize());
+    // 胶囊→面板：窗口先放大，胶囊 DOM 在新尺寸下会错位一帧（用户 2026-11-16）。
+    if (expanding) this._holdReveal();
     this._applyBounds(pos, this._panelSize());
     this.win.show();
     // 焦点策略(展开)：聚焦窗口；renderer 收到 state=panel 后上报 #web-host
@@ -216,6 +225,36 @@ class HudWindow {
     // went nowhere (t13 #9).
     if (this.web) this.web.focus();
     this._emitState();
+    if (expanding) this._armReveal();
+  }
+
+  // --- reveal handshake (anti-flash across capsule/panel switches) ----------
+  // The window is resized before the renderer has repainted, so for one frame
+  // the old layout is shown in the new geometry. Hiding the window content for
+  // that single frame removes the glitch. The renderer acks with hud:painted
+  // after two rAFs; a timer is the fallback if the ack never arrives.
+  _holdReveal() {
+    if (!this.win || this.win.isDestroyed()) return;
+    this._revealPending = true;
+    try { this.win.setOpacity(0); } catch { /* not supported */ }
+  }
+
+  _armReveal() {
+    if (!this._revealPending) return;
+    if (this._revealTimer) clearTimeout(this._revealTimer);
+    this._revealTimer = setTimeout(() => this._reveal(), REVEAL_FALLBACK_MS);
+  }
+
+  _reveal() {
+    if (this._revealTimer) {
+      clearTimeout(this._revealTimer);
+      this._revealTimer = null;
+    }
+    if (!this._revealPending) return;
+    this._revealPending = false;
+    if (this.win && !this.win.isDestroyed()) {
+      try { this.win.setOpacity(1); } catch { /* not supported */ }
+    }
   }
 
   // --- press-and-drag edge resize -------------------------------------------
@@ -1213,6 +1252,8 @@ class HudWindow {
     this._onCollapseDone = () => {
       if (this._animatingOut) this._finishCollapse();
     };
+    // Renderer painted the new mode -> drop the anti-flash opacity hold.
+    this._onPainted = () => this._reveal();
     this._onQuit = () => this.quit();
 
     // ---- embedded Web UI (t6) ----
@@ -1274,6 +1315,7 @@ class HudWindow {
     ipcMain.on('hud:drag-end', this._onDragEnd);
     ipcMain.on('hud:collapse', this._onCollapse);
     ipcMain.on('hud:collapse-done', this._onCollapseDone);
+    ipcMain.on('hud:painted', this._onPainted);
     ipcMain.on('hud:quit', this._onQuit);
     ipcMain.on('hud:web-bounds', this._onWebBounds);
     ipcMain.on('hud:web-retry', this._onWebRetry);
@@ -1430,12 +1472,18 @@ class HudWindow {
       this.web = null;
     }
 
+    if (this._revealTimer) {
+      clearTimeout(this._revealTimer);
+      this._revealTimer = null;
+    }
+
     const ipcPairs = [
       ['hud:drag-start', this._onDragStart],
       ['hud:drag-move', this._onDragMove],
       ['hud:drag-end', this._onDragEnd],
       ['hud:collapse', this._onCollapse],
       ['hud:collapse-done', this._onCollapseDone],
+      ['hud:painted', this._onPainted],
       ['hud:quit', this._onQuit],
       ['hud:web-bounds', this._onWebBounds],
       ['hud:web-retry', this._onWebRetry],
@@ -1467,3 +1515,7 @@ class HudWindow {
 }
 
 module.exports = HudWindow;
+
+// Reveal handshake: how long to wait for the renderer's paint ack before
+// showing the window anyway (a dropped ack must never leave it invisible).
+const REVEAL_FALLBACK_MS = 160;

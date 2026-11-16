@@ -1,9 +1,9 @@
 {
-  "version": "0.5.0",
-  "notes": "应用内更新修复：helper 的 asar 替换（process.noAsar）与重启环境（剔除 ELECTRON_RUN_AS_NODE）。",
+  "version": "0.5.1",
+  "notes": "开展/收起闪帧修复；构建不再打包 udd/ 缓存。",
   "appAsar": {
-    "url": "https://github.com/suianest/dsh-hud/releases/download/v0.5.0/app.asar",
-    "sha256": "837832b5130384ede0024c30a8ae0d9161a8698b1a06361e38c66e794e619609",
-    "size": 506064
+    "url": "https://github.com/suianest/dsh-hud/releases/download/v0.5.1/app.asar",
+    "sha256": "56204a60decdf45080306dbe6bf97ead3082614a759ba2c3143aa21758f9933d",
+    "size": 508889
   }
 }

@@ -9,6 +9,10 @@
 - 插件（`plugin/package.json`）独立版本，改协议时双方 `protocolVersion` 必须对齐；
 - 每个版本的条目在发版前写好，正文直接复制进 GitHub Release。
 
+## [0.5.1] - 2026-11-16
+### Fixed
+- **胶囊展开/收起时闪一帧错位内容**：窗口先 resize、renderer 后重绘，旧布局在新尺寸里露了一帧（用户 2026-11-16 报「图标先在左上角位移一帧」）。改为切换前 `setOpacity(0)`，renderer 画完新一帧回 `hud:painted` 再显示，160 ms 定时兜底；顺带补了 2 个单测。
+
 ## [Unreleased] - 0.5.0
 ### Fixed
 - **应用内更新此前在真机上从未成功**：`app/updater.cjs` 在 `ELECTRON_RUN_AS_NODE=1` 下被 Electron 的 fs shim 拦截，替换 `app.asar` 报 `ENOENT ... not found in app.asar`；改为文件顶部 `process.noAsar = true`。

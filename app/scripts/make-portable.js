@@ -215,6 +215,12 @@ function writeZip() {
   for (const junk of [path.join(OUT_DIR, 'app', 'boot.log'), path.join(OUT_DIR, 'udd')]) {
     try { fs.rmSync(junk, { recursive: true, force: true }); } catch { /* locked: retried below */ }
   }
+  // A running HUD recreates udd/ (Chromium cache: profile, GPU shader cache).
+  // Shipping it bloats the zip (~13 MB) and leaks per-machine data, so refuse
+  // instead of silently packaging caches.
+  if (fs.existsSync(path.join(OUT_DIR, 'udd'))) {
+    throw new Error('udd/ re-appeared (a DSH HUD instance is running) — stop it and rebuild, or the zip would ship Chromium caches');
+  }
   try {
     fs.rmSync(zipPath, { force: true });
     const ps = [

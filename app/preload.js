@@ -27,6 +27,11 @@ contextBridge.exposeInMainWorld('hud', {
   },
   collapseDone: () => ipcRenderer.send('hud:collapse-done'),
 
+  // Paint handshake: the renderer reports that the frame for the new mode has
+  // been painted, so main can reveal the window without flashing the old
+  // layout in the new geometry (capsule <-> panel switch).
+  painted: () => ipcRenderer.send('hud:painted'),
+
   // State push (main -> renderer): { mode: 'capsule' | 'panel', opaque: boolean }.
   onState: (callback) => {
     ipcRenderer.on('hud:state', (_event, state) => callback(state));
