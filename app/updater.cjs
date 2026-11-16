@@ -9,6 +9,13 @@
  * keeps a `.bak` for rollback, relaunches the app and exits.
  */
 
+// This helper runs inside Electron (ELECTRON_RUN_AS_NODE=1). Electron's fs
+// shim treats every `*.asar` path as an archive and rewrites reads into it, so
+// copying/renaming `resources/app.asar` fails with
+// "ENOENT, <path> not found in <app.asar>". Turn the shim off before any fs
+// call touches the asar; the helper is a plain file swapper (t43 finding).
+process.noAsar = true;
+
 const fs = require('node:fs');
 const path = require('node:path');
 const { spawn } = require('node:child_process');
@@ -65,8 +72,17 @@ async function main() {
   }
 
   if (pending.exe && fs.existsSync(pending.exe)) {
+    // The helper itself runs with ELECTRON_RUN_AS_NODE=1; inheriting that would
+    // make the relaunched app boot as plain Node (no window, exits instantly).
+    const childEnv = { ...process.env };
+    delete childEnv.ELECTRON_RUN_AS_NODE;
     try {
-      spawn(pending.exe, pending.args || [], { detached: true, stdio: 'ignore', cwd: path.dirname(pending.exe) }).unref();
+      spawn(pending.exe, pending.args || [], {
+        detached: true,
+        stdio: 'ignore',
+        cwd: path.dirname(pending.exe),
+        env: childEnv,
+      }).unref();
       log(pendingPath, 'relaunched ' + pending.exe);
     } catch (err) {
       log(pendingPath, 'relaunch failed: ' + (err && err.message));

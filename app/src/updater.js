@@ -119,7 +119,7 @@ async function checkForUpdate({ current, manifestUrl, sources, fetchImpl = globa
 }
 
 /** Download + verify, then stage the file for the helper. */
-async function downloadUpdate({ asarUrl, sha256: expected, size: expectedSize, version }, { destDir, fetchImpl = globalThis.fetch } = {}) {
+async function downloadUpdate({ asarUrl, sha256: expected, size: expectedSize, version, latest }, { destDir, fetchImpl = globalThis.fetch } = {}) {
   const res = await fetchImpl(asarUrl);
   if (!res || !res.ok) throw new Error('download HTTP ' + (res && res.status));
   const buf = Buffer.from(await res.arrayBuffer());
@@ -136,7 +136,9 @@ async function downloadUpdate({ asarUrl, sha256: expected, size: expectedSize, v
   fs.mkdirSync(destDir, { recursive: true });
   const staged = path.join(destDir, 'app.asar.new');
   fs.writeFileSync(staged, buf);
-  return { staged, sha256: actual, version, size: buf.length };
+  // `checkForUpdate()` reports the manifest version as `latest`; accept both so
+  // the returned record always carries a version (t43).
+  return { staged, sha256: actual, version: version || latest || undefined, size: buf.length };
 }
 
 /** Persist what the helper needs; called right before quitting. */

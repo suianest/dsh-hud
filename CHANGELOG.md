@@ -10,6 +10,11 @@
 - 每个版本的条目在发版前写好，正文直接复制进 GitHub Release。
 
 ## [Unreleased] - 0.5.0
+### Fixed
+- **应用内更新此前在真机上从未成功**：`app/updater.cjs` 在 `ELECTRON_RUN_AS_NODE=1` 下被 Electron 的 fs shim 拦截，替换 `app.asar` 报 `ENOENT ... not found in app.asar`；改为文件顶部 `process.noAsar = true`。
+- **更新后窗口不回来**：helper 把 `ELECTRON_RUN_AS_NODE=1` 继承给重启进程，新实例以纯 Node 启动、无窗口即退出；relaunch 前复制的 env 中删除该变量。
+- `downloadUpdate()` 返回值缺 `version`（清单字段是 `latest`），已兼容两者。
+- `make-portable.js` 的 `CANONICAL_FILES` 补 `updater.cjs`，helper 被误删时打包直接报错。
 
 ### Added
 

@@ -309,6 +309,11 @@ async function main() {
   const helperSrc = path.join(APP_DIR, 'updater.cjs');
   const helperDest = path.join(APP_OUT_DIR, 'resources', 'updater.cjs');
   fs.copyFileSync(helperSrc, helperDest);
+  const helperBody = fs.readFileSync(helperDest, 'utf8');
+  if (!helperBody.includes('process.noAsar')) {
+    console.error('[make-portable] updater helper is missing `process.noAsar = true` — app.asar swap would fail at runtime');
+    process.exit(1);
+  }
   console.log('[make-portable] updater helper:', helperDest);
 
   // Static manifest for the in-app update check. The release step uploads
