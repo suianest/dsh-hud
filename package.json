@@ -1,13 +1,8 @@
 {
   "name": "dsh-hud-capsule",
-  "version": "0.4.2",
-  "private": false,
+  "version": "0.5.0",
+  "description": "Windows 常驻悬浮胶囊 + 面板，把 DeepSeek Harness 贴在桌面上（DSH 插件 + Electron 伴生应用）",
   "type": "module",
-  "description": "DSH HUD：Windows 常驻悬浮胶囊 + 520px 紧凑面板（豆包式），内嵌 DSH Web UI。Cordis 插件负责发现 DSH 服务、写入发现文件，并在首次安装时自动拉取桌面应用包。",
-  "license": "MIT",
-  "engines": {
-    "node": ">=20"
-  },
   "main": "./plugin/index.js",
   "exports": {
     ".": "./plugin/index.js",
@@ -27,5 +22,30 @@
     "bundle": {
       "patch": "./cordis.patch.yml"
     }
-  }
+  },
+  "keywords": [
+    "dsh",
+    "deepseek-harness",
+    "cordis",
+    "plugin",
+    "desktop",
+    "overlay",
+    "capsule",
+    "electron",
+    "windows"
+  ],
+  "author": "suianest",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/suianest/dsh-hud.git"
+  },
+  "homepage": "https://github.com/suianest/dsh-hud#readme",
+  "bugs": {
+    "url": "https://github.com/suianest/dsh-hud/issues"
+  },
+  "engines": {
+    "node": ">=20"
+  },
+  "private": false
 }

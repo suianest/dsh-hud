@@ -9,7 +9,20 @@
 - 插件（`plugin/package.json`）独立版本，改协议时双方 `protocolVersion` 必须对齐；
 - 每个版本的条目在发版前写好，正文直接复制进 GitHub Release。
 
-## [Unreleased]
+## [Unreleased] - 0.5.0
+
+### Added
+
+- **npm 包名一键安装**：`dsh-hud-capsule@0.5.0` 已发布到 npm
+  （<https://www.npmjs.com/package/dsh-hud-capsule>）。DSH「添加插件」填包名即可，
+  应用包仍由插件首次运行自动下载。新增 `tools/publish-npm.mjs` 作为发布脚本。
+- `package.json` 补齐 npm 元数据（description / repository / homepage / bugs / keywords / `dsh.bundle.patch`）。
+
+### Notes
+
+- npm 2026 起默认 **staged publishing**：`publish` 只会进暂存区，维护者需在 npmjs.com 的
+  Staged Packages 页（或 `npm stage approve --otp`）用 2FA 批准后版本才上线；
+  首次发布还会生成 `0.0.0-stage` 占位版本（已 deprecate）。
 
 ## [0.4.2] - 2026-11-16
 
