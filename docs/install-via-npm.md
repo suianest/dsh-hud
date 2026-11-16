@@ -63,6 +63,24 @@ DSH 重启 → Cordis 按 package.json 的 dsh.bundle.patch 插入插件
 4. 备注：装好后如果本机已有应用包（比如 `dist/win-unpacked`），会被当成"未找到"而重新下载一份到
    `%LOCALAPPDATA%\DSH HUD`；想复用自己的包就设 `hudDir` 或 `DSH_HUD_DIR`。
 
+## GitHub 路线已验证（2026-11-16）
+
+根 `package.json` 改成插件包后，仓库同时支持两种装法：
+
+```bash
+# ① 从 GitHub 装（需要 git；仓库名与包名不同也没关系，pnpm 以 package.json 的 name 为准）
+pnpm add github:suianest/dsh-hud      # → node_modules/dsh-hud-capsule
+
+# ② 从 npm 装（发布后）
+pnpm add dsh-hud-capsule
+```
+
+实测：`pnpm add github:suianest/dsh-hud` → `+ dsh-hud-capsule 0.4.1`，目录内 `cordis.patch.yml` 存在，
+且该文件 insert 的 `name` 正是 `dsh-hud-capsule`（与安装目录同名，Cordis 能解析）。
+
+注意：改动前仓库里 `package.json` 还叫 `dsh-hud`，那时 `github:` 装出来是 `node_modules/dsh-hud`，
+和根 patch 里的名字对不上；现在两者一致了。
+
 ## 现在能用的两条路
 
 - **本地目录**：DSH → 添加插件 → 填 `D:\DeepSeekData\workspace\dsh-hud\plugin`（需要本机有仓库）。

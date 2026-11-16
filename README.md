@@ -4,7 +4,7 @@ Windows 常驻悬浮胶囊 + 520×720 紧凑面板（豆包式）。点胶囊或
 
 技术栈：Electron（44.7.0，随包分发）+ 一个很薄的 Cordis 插件（发现文件、计划任务拉起、登录自启、桌面/开始菜单快捷方式、IPC 桥、应用内更新源）。
 
-当前版本：**0.4.1**（[Release](https://github.com/suianest/dsh-hud/releases/latest)）
+当前版本：**0.4.2**（[Release](https://github.com/suianest/dsh-hud/releases/latest)）
 
 ## 截图
 
@@ -60,7 +60,9 @@ Windows 常驻悬浮胶囊 + 520×720 紧凑面板（豆包式）。点胶囊或
 
 **一键安装（推荐）**
 
-1. 打开 [最新 Release](https://github.com/suianest/dsh-hud/releases/latest)，下载 `安装 DSH HUD.cmd`（几百字节）。
+1. 下载安装器（几百字节，二选一）：
+   - [最新 Release](https://github.com/suianest/dsh-hud/releases/latest) 的附件 `安装 DSH HUD.cmd`；
+   - 或在仓库里打开 `installer/安装 DSH HUD.cmd` → 右上角 **Raw** / 下载按钮（Release 附件漏传时用这条）。
 2. 双击它。脚本会自动建目录、下载约 151 MB 安装包、校验 SHA-256、解压到 `%LOCALAPPDATA%\DSH HUD`，最后告诉你装在哪并问要不要现在启动。
 3. 想装到别的盘：`powershell -ExecutionPolicy Bypass -File install-dsh-hud.ps1 -InstallDir "D:\Apps\DSH HUD"`；离线时加 `-ZipPath "手动下载的zip"`。
 

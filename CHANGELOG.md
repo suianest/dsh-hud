@@ -11,6 +11,31 @@
 
 ## [Unreleased]
 
+## [0.4.2] - 2026-11-16
+
+审计驱动的一轮修复（t40 插件侧 / t41 app 侧 / t42 回归），全部为问题修复，无新功能。
+
+### Fixed
+
+- **首次安装后不刷新 HUD 定位**（t40 P-01，blocker）：插件只在启动时解析一次 `hud`，
+  自动安装成功后本次会话里的「随 DSH 启动 / 计划任务 / 快捷方式 / `/dsh-hud on`」全部失效，
+  必须重启 DSH。现在安装成功后 `refreshHud()` 重新解析并记录日志。
+- **启动链单点失败会跳过后续步骤**（t40 P-03）：整条启动流程原来裹在一个 try 里，
+  写 discovery 失败会连带跳过自动安装、自启、任务、快捷方式、拉起。现在六段各自 try/catch。
+- **老用户拿不到计划任务**（t40 P-05）：`ensureLaunchTask()` 原来嵌在「首次运行」分支里，
+  已有 autostart cookie 的安装永远不会重新注册任务。现在无条件执行（带 exe 有效性守卫）。
+- **打包版「打开 DSH 桌面窗口」必超时**（t40 P-02）：HUD 侧 `ipcDir` 打包后落在
+  `resources/artifacts/ipc`（构建机靠 junction 掩盖），插件只在 `<root>/artifacts/ipc` 找。
+  现在 HUD 侧按 `<root>/artifacts/ipc` 推导，插件侧再补两个候选目录。
+- **自动安装无超时/无镜像/无大小校验**（t40 P-04）：加 30s 清单超时、180s 下载超时、
+  失败自动走 `ghfast.top` 镜像重下一次、校验 `asset.size`；digest 缺失时只告警。
+- **安装器覆盖运行中的 HUD**（t41 M1）：解压前检测 `DSH HUD` 进程，提示并结束；拒绝则退出。
+- **打包清单漏 `src/config.js`**（t41 M2）：补进 `CANONICAL_FILES`。
+- **更新器不校验 manifest.size**（t41 low）：按清单大小校验，截断响应直接报 `size mismatch`。
+- **`check-hud.cmd` 清单缺文件**（t41 low）：补 `src/updater.js`、`src/shortcut.js`、`src/extensions.js`。
+- **登录项可能指向临时目录的 exe**：`applyAutostart` 增加临时路径守卫，测试 fixture 需显式
+  `DSH_HUD_ALLOW_TEMP_AUTOSTART=1` 才放行；单测在文件顶部统一关闭计划任务/快捷方式/自动安装。
+
 ## [0.4.1] - 2026-11-15
 
 修复版：收起动画的残影，以及更新清单的多源回退。

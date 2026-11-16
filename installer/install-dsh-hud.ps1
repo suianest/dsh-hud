@@ -120,6 +120,21 @@ try {
         Ok '本地包已就绪'
     }
 
+    # A running HUD locks DSH HUD.exe / *.dll, and Expand-Archive -Force then
+    # dies halfway, leaving a mixed old/new install (t41 M1).
+    $running = @(Get-Process -Name 'DSH HUD' -ErrorAction SilentlyContinue)
+    if ($running.Count -gt 0) {
+        Say "  检测到 $($running.Count) 个 DSH HUD 进程正在运行（占用安装目录里的文件）" Yellow
+        $answer = Read-Host '  需要先结束它们才能覆盖安装，继续吗？(Y/n)'
+        if ($answer -and $answer.Trim() -notmatch '^(y|yes|是)$') {
+            Say '  已取消：请先退出 DSH HUD（右键胶囊 → 退出），再重新运行安装器' Red
+            exit 1
+        }
+        $running | Stop-Process -Force -ErrorAction SilentlyContinue
+        Start-Sleep -Milliseconds 800
+        Ok '已结束运行中的 DSH HUD'
+    }
+
     Say '  正在解压...' DarkGray
     if (-not (Test-Path -LiteralPath $InstallDir)) {
         New-Item -ItemType Directory -Path $InstallDir -Force | Out-Null

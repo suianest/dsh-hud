@@ -1,6 +1,6 @@
 {
   "name": "dsh-hud-capsule",
-  "version": "0.4.1",
+  "version": "0.4.2",
   "private": false,
   "type": "module",
   "description": "DSH HUD：Windows 常驻悬浮胶囊 + 520px 紧凑面板（豆包式），内嵌 DSH Web UI。Cordis 插件负责发现 DSH 服务、写入发现文件，并在首次安装时自动拉取桌面应用包。",

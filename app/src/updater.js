@@ -119,10 +119,15 @@ async function checkForUpdate({ current, manifestUrl, sources, fetchImpl = globa
 }
 
 /** Download + verify, then stage the file for the helper. */
-async function downloadUpdate({ asarUrl, sha256: expected, version }, { destDir, fetchImpl = globalThis.fetch } = {}) {
+async function downloadUpdate({ asarUrl, sha256: expected, size: expectedSize, version }, { destDir, fetchImpl = globalThis.fetch } = {}) {
   const res = await fetchImpl(asarUrl);
   if (!res || !res.ok) throw new Error('download HTTP ' + (res && res.status));
   const buf = Buffer.from(await res.arrayBuffer());
+  // A truncated response would otherwise only fail at sha256 time with a
+  // confusing mismatch; the manifest already says how big the file is (t41).
+  if (expectedSize && buf.length !== expectedSize) {
+    throw new Error('size mismatch: expected ' + expectedSize + ' got ' + buf.length);
+  }
   const actual = sha256(buf);
   if (actual !== String(expected).toLowerCase()) {
     throw new Error('sha256 mismatch: expected ' + expected + ' got ' + actual);

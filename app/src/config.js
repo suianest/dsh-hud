@@ -54,13 +54,18 @@ function resolveRepoRoot(appPath) {
 
 function defaults(repoRoot, env) {
   const la = localAppData(env);
+  // Packaged: app.getAppPath() is <root>/resources/app.asar, so repoRoot is
+  // <root>/resources. The IPC folder must live at <root>/artifacts/ipc — the
+  // same place the plugin polls — instead of hiding under resources/ behind a
+  // build-machine junction (t40 P-02).
+  const installRoot = path.basename(repoRoot) === 'resources' ? path.dirname(repoRoot) : repoRoot;
   return {
     electronPath: path.join(repoRoot, 'runtime', 'node_modules', 'electron', 'dist', 'electron.exe'),
     appDir: path.join(repoRoot, 'app'),
     dshExe: '', // detection result; '' = not found
     dshWindowTitle: 'DeepSeek Harness',
     discoveryPath: la ? path.join(la, 'dsh-hud', 'discovery.json') : '',
-    ipcDir: path.join(repoRoot, 'artifacts', 'ipc'),
+    ipcDir: path.join(installRoot, 'artifacts', 'ipc'),
     userDataDir: la ? path.join(la, 'dsh-hud', 'userdata') : '',
     diagFile: path.join(os.tmpdir(), 'dsh-hud-plugin-diag.log'),
     nodePath: process.execPath || '',

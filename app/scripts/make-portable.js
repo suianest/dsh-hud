@@ -48,6 +48,7 @@ const CANONICAL_FILES = [
   'package.json',
   'src/autostart.js',
   'src/compact-css.js',
+  'src/config.js',
   'src/constants.js',
   'src/control.js',
   'src/discovery.js',

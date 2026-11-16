@@ -20,6 +20,14 @@ import os from 'node:os';
 import path from 'node:path';
 import { pathToFileURL } from 'node:url';
 
+// Unit tests must never touch real machine state: no Startup\dsh-hud.cmd, no
+// scheduled-task rewrite, no 150 MB release download, no follow-DSH launch.
+// Tests that exercise those paths opt back in explicitly (withPackagedHud).
+process.env.DSH_HUD_NO_LAUNCH_TASK = '1';
+process.env.DSH_HUD_NO_STARTMENU = '1';
+process.env.DSH_HUD_NO_AUTO_INSTALL = '1';
+process.env.DSH_HUD_AUTOSTART_WITH_DSH = '0';
+
 const HERE = path.dirname(new URL(import.meta.url).pathname.replace(/^\/([A-Za-z]:)/, '$1'));
 const ROOT = path.resolve(HERE, '..', '..', '..');
 const PLUGIN = path.resolve(ROOT, 'plugin', 'index.js');
@@ -646,14 +654,20 @@ async function withPackagedHud(fn, { cookie } = {}) {
   const prevUserData = process.env.DSH_HUD_USER_DATA;
   const prevStartMenu = process.env.DSH_HUD_NO_STARTMENU;
   const prevAutoStart = process.env.DSH_HUD_AUTOSTART_WITH_DSH;
+  const prevLaunchTask = process.env.DSH_HUD_NO_LAUNCH_TASK;
   // The Start-menu shortcut needs a real PowerShell + COM round-trip; tests
   // assert the decision logic instead of driving WScript.Shell.
   process.env.DSH_HUD_NO_STARTMENU = '1';
   // Never launch the real capsule from a unit test (auto-start uses a scheduled task).
   process.env.DSH_HUD_AUTOSTART_WITH_DSH = '0';
+  // The launch task would be registered against the throwaway %TEMP% exe above;
+  // a leftover task then pops "找不到文件" on every logon (2026-11-16 incident).
+  process.env.DSH_HUD_NO_LAUNCH_TASK = '1';
   const roaming = await fsp.mkdtemp(path.join(os.tmpdir(), 'dsh-hud-roaming-'));
   const isolatedUserData = await fsp.mkdtemp(path.join(os.tmpdir(), 'dsh-hud-userdata-'));
   process.env.APPDATA = roaming;
+  // The fixture exe lives under the temp dir; allow it for this scope only.
+  process.env.DSH_HUD_ALLOW_TEMP_AUTOSTART = '1';
   process.env.DSH_HUD_USER_DATA = isolatedUserData;
   const hudRoot = path.join(env.dir, 'DSH HUD');
   const exeDir = path.join(hudRoot, 'app');
@@ -667,11 +681,14 @@ async function withPackagedHud(fn, { cookie } = {}) {
   try {
     return await fn({ env, hudRoot, startupCmd });
   } finally {
+    delete process.env.DSH_HUD_ALLOW_TEMP_AUTOSTART;
     process.env.APPDATA = prevAppData;
     if (prevStartMenu === undefined) delete process.env.DSH_HUD_NO_STARTMENU;
     else process.env.DSH_HUD_NO_STARTMENU = prevStartMenu;
     if (prevAutoStart === undefined) delete process.env.DSH_HUD_AUTOSTART_WITH_DSH;
     else process.env.DSH_HUD_AUTOSTART_WITH_DSH = prevAutoStart;
+    if (prevLaunchTask === undefined) delete process.env.DSH_HUD_NO_LAUNCH_TASK;
+    else process.env.DSH_HUD_NO_LAUNCH_TASK = prevLaunchTask;
     if (prevUserData === undefined) delete process.env.DSH_HUD_USER_DATA;
     else process.env.DSH_HUD_USER_DATA = prevUserData;
     await fsp.rm(roaming, { recursive: true, force: true });

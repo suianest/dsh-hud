@@ -211,10 +211,37 @@ export function resolveHud(opts = {}) {
 const RELEASE_API = 'https://api.github.com/repos/suianest/dsh-hud/releases/latest';
 const AUTO_INSTALL_DIR = () => path.join(process.env.LOCALAPPDATA || os.tmpdir(), 'DSH HUD');
 
-async function downloadTo(url, dest) {
-  const res = await fetch(url, { redirect: 'follow', headers: { 'user-agent': 'dsh-hud-plugin' } });
+// GitHub is unreliable behind the GFW, and a 150 MB body can stall forever, so
+// every request gets a hard timeout and the download gets one mirror retry
+// (same read-only proxy the standalone installer uses) — t40 P-04.
+const RELEASE_TIMEOUT_MS = 30_000;
+const DOWNLOAD_TIMEOUT_MS = 180_000;
+const MIRROR_PREFIX = 'https://ghfast.top/';
+
+async function fetchWithTimeout(url, ms, init = {}) {
+  const res = await fetch(url, {
+    redirect: 'follow',
+    ...init,
+    signal: AbortSignal.timeout(ms),
+  });
   if (!res.ok || !res.body) throw new Error('HTTP ' + res.status + ' for ' + url);
-  await pipeline(Readable.fromWeb(res.body), createWriteStream(dest));
+  return res;
+}
+
+async function downloadTo(url, dest) {
+  const once = async (u) => {
+    const res = await fetchWithTimeout(u, DOWNLOAD_TIMEOUT_MS, {
+      headers: { 'user-agent': 'dsh-hud-plugin' },
+    });
+    await pipeline(Readable.fromWeb(res.body), createWriteStream(dest));
+  };
+  try {
+    await once(url);
+  } catch (err) {
+    await rm(dest, { force: true }).catch(() => {});
+    const mirror = MIRROR_PREFIX + url;
+    await once(mirror);
+  }
   return dest;
 }
 
@@ -231,11 +258,19 @@ function sha256File(file) {
 export async function installHudApp(opts = {}) {
   if (process.platform !== 'win32') return { ok: false, message: 'only supported on Windows' };
   const dir = opts.dir || AUTO_INSTALL_DIR();
-  const rel = await (await fetch(RELEASE_API, { headers: { 'user-agent': 'dsh-hud-plugin' } })).json();
+  const relRes = await fetchWithTimeout(RELEASE_API, RELEASE_TIMEOUT_MS, {
+    headers: { 'user-agent': 'dsh-hud-plugin' },
+  });
+  const rel = await relRes.json();
   const asset = (rel.assets || []).find((a) => /^DSH-HUD-.*-win-x64\.zip$/.test(a.name));
   if (!asset) return { ok: false, message: 'release has no win-x64 zip' };
   const zip = path.join(os.tmpdir(), 'dsh-hud-' + (asset.id || Date.now()) + '.zip');
   await downloadTo(asset.browser_download_url, zip);
+  const size = statSync(zip).size;
+  if (asset.size && size !== asset.size) {
+    await rm(zip, { force: true });
+    throw new Error('size mismatch: expected ' + asset.size + ' got ' + size);
+  }
   const digest = (asset.digest || '').replace(/^sha256:/, '').toLowerCase();
   if (digest) {
     const got = await sha256File(zip);
@@ -243,6 +278,9 @@ export async function installHudApp(opts = {}) {
       await rm(zip, { force: true });
       throw new Error('sha256 mismatch: expected ' + digest + ' got ' + got);
     }
+  } else {
+    // Older assets may not carry a digest; size is still enforced above.
+    console.error('[dsh-hud] release asset has no sha256 digest; size check only');
   }
   await mkdir(dir, { recursive: true });
   const q = (v) => "'" + String(v).replace(/'/g, "''") + "'";
@@ -392,13 +430,21 @@ export function apply(ctx, config = {}) {
   // --- HUD / DSH desktop location (t36 P-02) ------------------------------
   // Explicit config → env → config.local.json → auto-detect. A miss degrades
   // to a skip + one clear log line (never a throw).
-  const hud = resolveHud({
+  const hudOptions = () => ({
     exePath: config.exePath ?? envStr('DSH_HUD_EXE') ?? localConfig.exePath,
     hudDir: config.hudDir ?? envStr('DSH_HUD_DIR') ?? localConfig.hudDir,
     devElectron: cfg.electronPath,
     devAppDir: cfg.appDir,
     devLauncher: cfg.launcherPath,
   });
+  // Resolved once at apply time, but re-resolved after a first-run auto-install:
+  // otherwise the fresh HUD is invisible to autostart/shortcut/task/auto-start
+  // until DSH is restarted (t40 P-01).
+  let hud = resolveHud(hudOptions());
+  const refreshHud = () => {
+    hud = resolveHud(hudOptions());
+    return hud;
+  };
   const desktopExe = resolveDesktopExe({
     desktopExe: config.desktopExe ?? config.dshExe ?? envStr('DSH_HUD_DSH_EXE') ?? localConfig.desktopExe ?? localConfig.dshExe,
   });
@@ -914,34 +960,68 @@ export function apply(ctx, config = {}) {
   // starts, otherwise it can delete the tmp of that very write (t16 B1).
   void (async () => {
     await cleanupTmpFiles();
+
+    // Every step is isolated: one failure must not skip the rest (t40 P-03).
     try {
       const d = await writeDiscovery();
       log('discovery written port=' + d.port + ' origin=' + d.origin);
       notifyReloadIfChanged(d);
-      // npm installs carry the plugin only; fetch the app once when it is absent.
-      if (process.platform === 'win32' && process.env.DSH_HUD_NO_AUTO_INSTALL !== '1' && !resolveHud().found) {
+    } catch (err) {
+      log('discovery write failed:', err?.message ?? err);
+    }
+
+    // npm installs carry the plugin only; fetch the app once when it is absent.
+    if (process.platform === 'win32' && process.env.DSH_HUD_NO_AUTO_INSTALL !== '1' && !hud.found) {
+      try {
         log('HUD not found; auto-installing from the latest release (first run)');
-        await installHudApp()
-          .then((r) => log('auto-install:', r.ok ? r.message : 'failed: ' + r.message))
-          .catch((err) => log('auto-install failed:', err?.message ?? err));
+        const r = await installHudApp();
+        log('auto-install:', r.ok ? r.message : 'failed: ' + r.message);
+        if (r.ok) {
+          refreshHud();
+          log(
+            hud.found
+              ? 'HUD found after auto-install: ' + (hud.exe ?? hud.dir)
+              : 'HUD still missing after auto-install (' + hud.reason + ')',
+          );
+        }
+      } catch (err) {
+        log('auto-install failed:', err?.message ?? err);
       }
+    }
+
+    try {
       const wantAutostart = autostartDesired();
       if (wantAutostart === true) {
-        await applyAutostart(true).catch((err) => log('autostart reconcile failed:', err?.message ?? err));
+        await applyAutostart(true);
       } else if (wantAutostart === false) {
-        await applyAutostart(false).catch(() => {});
+        await applyAutostart(false);
       } else if (packagedLauncher() && process.env.DSH_HUD_NO_AUTOSTART !== '1') {
         // P-07: a fresh plugin-only install has no cookie and no shortcut, so
         // without this the capsule would never appear at logon. Install once,
         // then record the decision so a later "off" is never overridden.
-        await installFirstRunAutostart().catch((err) => log('autostart first-run failed:', err?.message ?? err));
-    await ensureLaunchTask().catch((err) => log('launch task setup failed:', err?.message ?? err));
+        await installFirstRunAutostart();
       }
-      // P-08: the HUD cannot write %APPDATA%\Roaming itself (Low IL), so the
-      // Medium-IL host owns the Start-menu shortcut as well.
-      await ensureStartMenuShortcut().catch((err) =>
-        log('start-menu shortcut failed:', err?.message ?? err),
-      );
+    } catch (err) {
+      log('autostart step failed:', err?.message ?? err);
+    }
+
+    // Registration is independent of the first-run branch: existing users also
+    // need the task (re)pointed at the current exe (t40 P-05).
+    try {
+      await ensureLaunchTask();
+    } catch (err) {
+      log('launch task setup failed:', err?.message ?? err);
+    }
+
+    // P-08: the HUD cannot write %APPDATA%\Roaming itself (Low IL), so the
+    // Medium-IL host owns the Start-menu shortcut as well.
+    try {
+      await ensureStartMenuShortcut();
+    } catch (err) {
+      log('start-menu shortcut failed:', err?.message ?? err);
+    }
+
+    try {
       // Legacy opt-in path first: it starts the dev checkout synchronously.
       if (cfg.spawnApp) ensureRunning();
       // "Follow DSH" (packaged installs only): the scheduled task is the one
@@ -957,7 +1037,7 @@ export function apply(ctx, config = {}) {
         }
       }
     } catch (err) {
-      log('discovery write failed:', err?.message ?? err);
+      log('start-with-DSH step failed:', err?.message ?? err);
     }
   })();
 
@@ -976,6 +1056,17 @@ export function apply(ctx, config = {}) {
   const ipcDirectories = () => {
     if (process.env.DSH_HUD_IPC_DIR) return [process.env.DSH_HUD_IPC_DIR];
     const dirs = [path.join(path.dirname(cfg.appDir), 'artifacts', 'ipc')];
+    // Packaged installs write next to their own resources directory
+    // (<root>/artifacts/ipc, or <root>/resources/artifacts/ipc when the asar is
+    // under resources/). Without this the desktop-focus request silently times
+    // out on any machine that is not the build machine (t40 P-02).
+    if (hud.found) {
+      const root = hud.root ?? (hud.dir && path.basename(hud.dir) === 'app' ? path.dirname(hud.dir) : hud.dir);
+      if (root) {
+        dirs.push(path.join(root, 'artifacts', 'ipc'));
+        dirs.push(path.join(root, 'resources', 'artifacts', 'ipc'));
+      }
+    }
     if (process.env.LOCALAPPDATA) {
       dirs.push(path.join(process.env.LOCALAPPDATA, 'dsh-hud', 'ipc'));
     }
@@ -1035,9 +1126,22 @@ const PROTOCOL_VERSION = 1;
       '',
     ].join('\r\n');
   };
+  // A temporary exe (test fixture, half-extracted zip) must never become the
+  // logon entry: the file disappears and every login shows "Windows cannot
+  // find ...". Same guard as the scheduled-task path.
+  const isTempPath = (p) => {
+    const t = os.tmpdir().toLowerCase();
+    return String(p || '').toLowerCase().startsWith(t);
+  };
   async function applyAutostart(enabled) {
     const file = startupCmdFile();
     if (enabled) {
+      const target = packagedLauncher();
+      const exe = target ? target.exe : cfg.electronPath;
+      if (isTempPath(exe) && process.env.DSH_HUD_ALLOW_TEMP_AUTOSTART !== '1') {
+        log('autostart skipped: launcher lives in a temp folder', exe);
+        return file;
+      }
       await mkdir(path.dirname(file), { recursive: true });
       await writeFile(file, autostartScript(), 'ascii');
     } else {
@@ -1171,10 +1275,29 @@ const PROTOCOL_VERSION = 1;
   let launchTaskReady = false;
   const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
+  async function removeLaunchTask() {
+    const ps =
+      "$ErrorActionPreference = 'SilentlyContinue';" +
+      " if (Get-ScheduledTask -TaskName '" + LAUNCH_TASK + "' -ErrorAction SilentlyContinue)" +
+      " { Unregister-ScheduledTask -TaskName '" + LAUNCH_TASK + "' -Confirm:$false }";
+    await runPowerShell(ps, 15_000).catch(() => {});
+    launchTaskReady = false;
+    log('launch task removed (no valid HUD exe)');
+  }
+
   async function ensureLaunchTask() {
     if (process.env.DSH_HUD_NO_LAUNCH_TASK === '1') return false;
     const packaged = packagedLauncher();
     if (!packaged) return false;
+    // A task whose action points at a missing exe makes Windows pop
+    // "找不到文件" on every logon. Tests used to resolve a throwaway exe under
+    // %TEMP% and leave that task behind, so refuse anything that is not a real
+    // installed binary (and never a temp path) and clean the stale task up.
+    const tmp = path.resolve(os.tmpdir()).toLowerCase();
+    if (!existsSync(packaged.exe) || path.resolve(packaged.exe).toLowerCase().startsWith(tmp)) {
+      await removeLaunchTask();
+      return false;
+    }
     const ps = [
       "$ErrorActionPreference = 'Stop';",
       'try {',
