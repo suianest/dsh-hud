@@ -9,6 +9,13 @@
 - 插件（`plugin/package.json`）独立版本，改协议时双方 `protocolVersion` 必须对齐；
 - 每个版本的条目在发版前写好，正文直接复制进 GitHub Release。
 
+## [Unreleased] - 0.5.3
+
+### Fixed
+
+- `exports` 增加 `"./package.json"`，第三方工具可以 `require('dsh-hud-capsule/package.json')` 读版本（0.5.2 之前会抛 `ERR_PACKAGE_PATH_NOT_EXPORTED`）。
+- 移除误加进 `package.json` 的 `dependencies: {"dsh-hud-capsule": "^0.5.0"}` 自依赖（本地安装自检时被 pnpm 自动写入，幸好未进入已发布的 0.5.2 包）。
+
 ## [0.5.2] - 2026-11-17
 ### Fixed
 - **国内网络下下载链路不可用**（三条路线复现性实测 2026-11-17）：GitHub 直连 151 MB 包实测 14.8 KB/s 且中途 `Connection was reset`；`ghfast.top` 不可达；`raw.githubusercontent.com` 与 `cdn.jsdelivr.net` 在 TCP 层就失败。

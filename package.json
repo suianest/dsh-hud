@@ -6,6 +6,7 @@
   "main": "./plugin/index.js",
   "exports": {
     ".": "./plugin/index.js",
+    "./package.json": "./package.json",
     "./locale/*.json": "./plugin/locale/*.json",
     "./icon": "./plugin/icon.svg"
   },
