@@ -9,6 +9,14 @@
 - 插件（`plugin/package.json`）独立版本，改协议时双方 `protocolVersion` 必须对齐；
 - 每个版本的条目在发版前写好，正文直接复制进 GitHub Release。
 
+## [0.5.2] - 2026-11-17
+### Fixed
+- **国内网络下下载链路不可用**（三条路线复现性实测 2026-11-17）：GitHub 直连 151 MB 包实测 14.8 KB/s 且中途 `Connection was reset`；`ghfast.top` 不可达；`raw.githubusercontent.com` 与 `cdn.jsdelivr.net` 在 TCP 层就失败。
+  - 安装器：镜像从 `ghfast.top` 单一源改为 **ghproxy.net → gh-proxy.com → ghfast.top → 直连** 依次尝试，并优先用 `curl.exe -C -` 断点续传（Windows 10 1809+ 自带 curl），超时 600 s → 1800 s。
+  - 插件自动安装：`downloadTo()` 同样按 4 个源轮换，单源超时 180 s → 600 s；失败时清理半包再换源。
+  - 应用内更新：清单源顺序改为 **raw → Release 附件 → jsDelivr → REST API**，并给 Release 补传 `manifest.json` 附件，让 `releases/latest/download/manifest.json` 这条兜底真正可用（此前 404）。
+- `make-portable.js` 发现 `udd/` 被运行中的 HUD 重建时直接报错，避免把 Chromium 缓存（约 13 MB、含本机数据）打进 zip。
+
 ## [0.5.1] - 2026-11-16
 ### Fixed
 - **胶囊展开/收起时闪一帧错位内容**：窗口先 resize、renderer 后重绘，旧布局在新尺寸里露了一帧（用户 2026-11-16 报「图标先在左上角位移一帧」）。改为切换前 `setOpacity(0)`，renderer 画完新一帧回 `hud:painted` 再显示，160 ms 定时兜底；顺带补了 2 个单测。

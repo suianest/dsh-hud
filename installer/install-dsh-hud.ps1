@@ -33,14 +33,27 @@ function Warn($msg) { Write-Host "  [!]    $msg" -ForegroundColor Yellow }
 function Fail($msg) { Write-Host "  [X]    $msg" -ForegroundColor Red }
 
 function Save-WithFallback($Url, $OutFile, $Label) {
+    # GitHub 直连在国内常年只有 ~15 KB/s 且会中途 reset；镜像可用性也会变，
+    # 所以这里给一份多镜像清单（顺序可变、逐个尝试），并用 curl 的断点续传
+    # 抵消 reset（151 MB 的包在 100 KB/s 下也要 20 分钟）。
     $mirrors = @($Url)
-    if ($Url -match '^https://github\.com/(.+)$') { $mirrors += "https://ghfast.top/$Url" }
+    if ($Url -match '^https://github\.com/(.+)$') {
+        foreach ($p in @('https://ghproxy.net/', 'https://gh-proxy.com/', 'https://ghfast.top/')) {
+            $mirrors += "$p$Url"
+        }
+    }
+    $curl = Get-Command curl.exe -ErrorAction SilentlyContinue
     $i = 0
     foreach ($u in $mirrors) {
         $i++
         try {
             Say "  正在下载 $Label（源 $i/$($mirrors.Count)）..." DarkGray
-            Invoke-WebRequest -Uri $u -OutFile $OutFile -UseBasicParsing -UserAgent $UserAgent -TimeoutSec 600
+            if ($curl) {
+                & $curl.Source -L -C - --fail --retry 3 --retry-delay 2 --connect-timeout 20 --max-time 3600 -o $OutFile $u
+                if ($LASTEXITCODE -ne 0) { throw "curl 退出码 $LASTEXITCODE" }
+                return
+            }
+            Invoke-WebRequest -Uri $u -OutFile $OutFile -UseBasicParsing -UserAgent $UserAgent -TimeoutSec 1800
             return
         } catch {
             if ($i -eq $mirrors.Count) { throw }

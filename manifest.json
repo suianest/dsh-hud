@@ -1,9 +1,9 @@
 {
-  "version": "0.5.1",
-  "notes": "开展/收起闪帧修复；构建不再打包 udd/ 缓存。",
+  "version": "0.5.2",
+  "notes": "下载链路修复：安装器与插件自动安装多镜像+断点续传，更新清单补 Release 附件兵底。",
   "appAsar": {
-    "url": "https://github.com/suianest/dsh-hud/releases/download/v0.5.1/app.asar",
-    "sha256": "56204a60decdf45080306dbe6bf97ead3082614a759ba2c3143aa21758f9933d",
-    "size": 508889
+    "url": "https://github.com/suianest/dsh-hud/releases/download/v0.5.2/app.asar",
+    "sha256": "b791cb7867c1e5fca3d32947570a990624977d91866c8331a66c4892a8a335ca",
+    "size": 509308
   }
 }

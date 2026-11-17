@@ -24,16 +24,16 @@ const path = require('path');
 const REPO = 'https://github.com/suianest/dsh-hud';
 
 /**
- * Manifest mirrors, tried in order. raw.githubusercontent.com is often reset
- * by carrier-grade NAT / DNS pollution on some networks, jsDelivr sometimes
- * 403s at the edge, and github.com itself can be slow — so we keep four
- * independent routes, including the GitHub REST API (which stays reachable in
- * most of the cases where the CDN hosts are not).
+ * Manifest mirrors, tried in order. Measured 2026-11-16 on a GFW-affected
+ * network: raw.githubusercontent.com and cdn.jsdelivr.net both fail at the TCP
+ * layer, so the release-asset copy and the REST API are what actually answer.
+ * Keep all four — the API is rate-limited, the CDN hosts are blocked in some
+ * networks, and the release asset is the same host as the asar download.
  */
 const DEFAULT_MANIFEST_SOURCES = [
   'https://raw.githubusercontent.com/suianest/dsh-hud/main/manifest.json',
-  'https://cdn.jsdelivr.net/gh/suianest/dsh-hud@main/manifest.json',
   `${REPO}/releases/latest/download/manifest.json`,
+  'https://cdn.jsdelivr.net/gh/suianest/dsh-hud@main/manifest.json',
   'https://api.github.com/repos/suianest/dsh-hud/contents/manifest.json?ref=main',
 ];
 

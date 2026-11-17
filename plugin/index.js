@@ -212,11 +212,13 @@ const RELEASE_API = 'https://api.github.com/repos/suianest/dsh-hud/releases/late
 const AUTO_INSTALL_DIR = () => path.join(process.env.LOCALAPPDATA || os.tmpdir(), 'DSH HUD');
 
 // GitHub is unreliable behind the GFW, and a 150 MB body can stall forever, so
-// every request gets a hard timeout and the download gets one mirror retry
-// (same read-only proxy the standalone installer uses) — t40 P-04.
+// every request gets a hard timeout and the download walks a mirror list
+// (same proxies the standalone installer uses). Measured 2026-11-16: direct
+// github.com ~15 KB/s with resets; ghproxy.net / gh-proxy.com ~110 KB/s; the
+// ghfast.top proxy the installer used first was unreachable. — t40 P-04
 const RELEASE_TIMEOUT_MS = 30_000;
-const DOWNLOAD_TIMEOUT_MS = 180_000;
-const MIRROR_PREFIX = 'https://ghfast.top/';
+const DOWNLOAD_TIMEOUT_MS = 600_000;
+const MIRROR_PREFIXES = ['https://ghproxy.net/', 'https://gh-proxy.com/', 'https://ghfast.top/'];
 
 async function fetchWithTimeout(url, ms, init = {}) {
   const res = await fetch(url, {
@@ -235,14 +237,18 @@ async function downloadTo(url, dest) {
     });
     await pipeline(Readable.fromWeb(res.body), createWriteStream(dest));
   };
-  try {
-    await once(url);
-  } catch (err) {
-    await rm(dest, { force: true }).catch(() => {});
-    const mirror = MIRROR_PREFIX + url;
-    await once(mirror);
+  const sources = [url, ...MIRROR_PREFIXES.map((p) => p + url)];
+  let lastErr;
+  for (const src of sources) {
+    try {
+      await once(src);
+      return dest;
+    } catch (err) {
+      lastErr = err;
+      await rm(dest, { force: true }).catch(() => {});
+    }
   }
-  return dest;
+  throw lastErr;
 }
 
 function sha256File(file) {
