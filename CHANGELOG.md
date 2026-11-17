@@ -9,7 +9,7 @@
 - 插件（`plugin/package.json`）独立版本，改协议时双方 `protocolVersion` 必须对齐；
 - 每个版本的条目在发版前写好，正文直接复制进 GitHub Release。
 
-## [Unreleased] - 0.5.3
+## [0.5.3] - 2026-11-17
 
 ### Fixed
 

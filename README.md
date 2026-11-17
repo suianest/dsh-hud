@@ -50,7 +50,7 @@ Windows 常驻悬浮胶囊 + 520×720 紧凑面板（豆包式）。点胶囊或
 |---|---|---|---|
 | **A · 便携版** | 只要桌面胶囊，不想碰插件 | 下载 `install-dsh-hud.cmd` 双击，或解压 zip 后双击 `DSH HUD.lnk` | 安装器自动下载 |
 | **B · GitHub 仓库装插件** | 有 git、想用仓库版（推荐开发者） | DSH 添加插件填 `github:suianest/dsh-hud`（或本地目录 `D:\...\dsh-hud`） | 插件首次运行自动下载 |
-| **C · npm 包名装插件** | 只想填一个名字 | 填 `dsh-hud-capsule`（[npm 已发布 0.5.2](https://www.npmjs.com/package/dsh-hud-capsule)） | 插件首次运行自动下载 |
+| **C · npm 包名装插件** | 只想填一个名字 | 填 `dsh-hud-capsule`（[npm 已发布 0.5.3](https://www.npmjs.com/package/dsh-hud-capsule)） | 插件首次运行自动下载 |
 
 - **A** 见下一节；**B/C** 见「形态 B」。
 - B 需要本机有 `git`（仓库自带 `installer\...` 不含 git，需自行安装或使用本文档附带的 PortableGit 说明）；C 直接走 npm registry（见 `docs/install-via-npm.md`）。

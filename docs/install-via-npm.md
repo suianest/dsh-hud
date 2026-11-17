@@ -1,6 +1,6 @@
 # 通过 npm 包名一键安装（流程摸底）
 
-> 状态：**已发布 0.5.2**（2026-11-17，<https://www.npmjs.com/package/dsh-hud-capsule>）。本文记录整条链路、staged publishing 的坑和验证结果。
+> 状态：**已发布 0.5.3**（2026-11-17，<https://www.npmjs.com/package/dsh-hud-capsule>）。本文记录整条链路、staged publishing 的坑和验证结果。
 
 ## 目标
 
@@ -60,10 +60,10 @@ DSH 重启 → Cordis 按 package.json 的 dsh.bundle.patch 插入插件
 | 步骤 | 结果 |
 |---|---|
 | npm 账号 / token | `suianest`，granular token（`Read and write (publish and stage)`，Bypass 2FA） |
-| 发布 | `dsh-hud-capsule@0.5.2`，latest 指向 0.5.2（0.5.0 仍保留在 versions 里） |
-| 产物一致性 | registry tarball 与本地 `artifacts/dsh-hud-capsule-0.5.2.tgz` 同为 28,091 B、sha1 `59bec1b4ca9f9658a94a258c0d15b4656f93b84a` |
-| 真实安装 | `pnpm add dsh-hud-capsule@0.5.2` → `+ dsh-hud-capsule 0.5.2`（1.8 s），导出 `apply/installHudApp/resolveDesktopExe/resolveHud` |
-| 占位版本 | `0.0.0-stage` 已 deprecate（指向 0.5.2） |
+| 发布 | `dsh-hud-capsule@0.5.3`，latest 指向 0.5.3（0.5.0/0.5.2 保留在 versions 里） |
+| 产物一致性 | registry tarball 与本地 `artifacts/dsh-hud-capsule-0.5.3.tgz` 同为 28,099 B、sha1 `fcf69cf9e107642bd89a43da3cc1bb170dd4f1b8` |
+| 真实安装 | `pnpm add dsh-hud-capsule@0.5.3` → `+ dsh-hud-capsule 0.5.3`，导出 `apply/installHudApp/resolveDesktopExe/resolveHud`，`require("…/package.json")` 可用 |
+| 占位版本 | `0.0.0-stage` 已 deprecate（指向 0.5.3） |
 
 ### ⚠️ npm 2026 的 staged publishing
 
@@ -100,7 +100,7 @@ pnpm add dsh-hud-capsule
 
 ## 现在能用的三条路
 
-- **npm 包名**：DSH → 添加插件 → 填 `dsh-hud-capsule`（已发布 0.5.2；应用包首次自动下载）。
+- **npm 包名**：DSH → 添加插件 → 填 `dsh-hud-capsule`（已发布 0.5.3；应用包首次自动下载）。
 - **本地目录**：DSH → 添加插件 → 填 `D:\DeepSeekData\workspace\dsh-hud\plugin`（需要本机有仓库）。
 - **便携版**：从 Release 下载 zip（或用 Release 里的 `install-dsh-hud.cmd` 一键装，仓库内同名文件为 `installer/安装 DSH HUD.cmd`），双击 `DSH HUD.lnk`。
 
