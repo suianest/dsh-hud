@@ -904,11 +904,11 @@ export function apply(ctx, config = {}) {
             visible = true;
             return { kind: 'success', text: 'DSH 浮窗已打开（进程已在运行）' };
           }
-          const ok = await startHudViaTask();
+          const ok = await ensureHudRunning();
           visible = ok;
           return ok
             ? { kind: 'success', text: 'DSH HUD 已启动' }
-            : { kind: 'error', text: '启动失败：没有找到打包版 HUD，或计划任务不可用（详见插件诊断日志）' };
+            : { kind: 'error', text: '启动失败：没有找到打包版 HUD（详见插件诊断日志）' };
         }
         if (action === 'off') {
           if ((await hudProcessCount()) <= 0) return { kind: 'success', text: 'DSH HUD 未在运行' };
@@ -1026,12 +1026,17 @@ export function apply(ctx, config = {}) {
       log('autostart step failed:', err?.message ?? err);
     }
 
-    // Registration is independent of the first-run branch: existing users also
-    // need the task (re)pointed at the current exe (t40 P-05).
-    try {
-      await ensureLaunchTask();
-    } catch (err) {
-      log('launch task setup failed:', err?.message ?? err);
+    // Only the opt-in task path registers a scheduled task. Default installs
+    // spawn the exe directly, so we never leave behind a task whose action is
+    // an unsigned auto-start target (that is what AV tools flag).
+    if (useTaskOnly()) {
+      try {
+        await ensureLaunchTask();
+      } catch (err) {
+        log('launch task setup failed:', err?.message ?? err);
+      }
+    } else {
+      await removeLegacyLaunchTask();
     }
 
     // P-08: the HUD cannot write %APPDATA%\Roaming itself (Low IL), so the
@@ -1053,8 +1058,8 @@ export function apply(ctx, config = {}) {
         } else if ((await hudProcessCount()) > 0) {
           log('capsule already running; skip auto-start');
         } else {
-          const started = await startHudViaTask().catch(() => false);
-          log(started ? 'auto-started with DSH' : 'auto-start with DSH failed (task unavailable)');
+          const started = await ensureHudRunning();
+          log(started ? 'auto-started with DSH' : 'auto-start with DSH failed (see log above)');
         }
       }
     } catch (err) {
@@ -1287,11 +1292,14 @@ const PROTOCOL_VERSION = 1;
   }
 
   // --- launch task (on/off from DSH) ---------------------------------------
-  // The DSH host cannot spawn Electron: the child dies at 0x80000003 while
-  // Chromium sets up its crashpad/mojo pipes, and going through explorer
-  // pops a manual "allow" prompt. A per-user scheduled task runs outside this
-  // process tree with the normal token, so Start-ScheduledTask is silent
-  // (verified 2026-11-13). `off` uses the control channel's quit action.
+  // 2026-11-13 the host's direct spawn died at 0x80000003 (Chromium setting up
+  // crashpad/mojo). Re-tested 2026-11-18: the crash came from the child falling
+  // back to the shared %APPDATA%\Electron profile -- with `--no-sandbox` plus a
+  // writable `--user-data-dir` a direct spawn from this host stays up (verified
+  // end-to-end, 5 processes, no 8s exit). Direct spawn is therefore the default
+  // again; the per-user scheduled task is kept only as the opt-in fallback
+  // (`DSH_HUD_USE_TASK=1`), because a task that starts an unsigned exe is what
+  // AV like 悟空 flags. `off` uses the control channel's quit action.
   const LAUNCH_TASK = 'dsh-hud-launch';
   let launchTaskReady = false;
   const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
@@ -1334,6 +1342,83 @@ const PROTOCOL_VERSION = 1;
     launchTaskReady = code === 0;
     log(launchTaskReady ? 'launch task ready: ' + LAUNCH_TASK : 'launch task failed: ' + (out || 'exit ' + code));
     return launchTaskReady;
+  }
+
+  const useTaskOnly = () => process.env.DSH_HUD_USE_TASK === '1';
+
+  /**
+   * Start the packaged HUD as a detached child of this host process.
+   *
+   * The child must get `--no-sandbox` and a writable `--user-data-dir`: without
+   * them Chromium picks the shared `%APPDATA%\Electron` profile and aborts with
+   * 0x80000003 before any of our JS runs. `detached` + `unref` keeps it alive
+   * when DSH exits; `stdio: 'ignore'` keeps the pipes out of our process tree.
+   */
+  async function startHudDirect() {
+    const packaged = packagedLauncher();
+    if (!packaged) {
+      log('direct launch skipped: no packaged launcher resolved');
+      return false;
+    }
+    // Never let the child inherit ELECTRON_RUN_AS_NODE: some DSH shells set it,
+    // and an Electron binary started with it runs as plain Node (no window).
+    const childEnv = { ...process.env };
+    delete childEnv.ELECTRON_RUN_AS_NODE;
+    try {
+      const child = spawn(packaged.exe, ['--no-sandbox', '--user-data-dir=' + packaged.udd], {
+        cwd: path.dirname(packaged.exe),
+        detached: true,
+        stdio: 'ignore',
+        windowsHide: true,
+        env: childEnv,
+      });
+      child.on('error', (err) => log('direct launch error:', err?.message ?? err));
+      child.unref();
+      log('direct launch requested: ' + path.basename(packaged.exe) + ' pid=' + child.pid);
+    } catch (err) {
+      log('direct launch failed:', err?.message ?? err);
+      return false;
+    }
+    for (let i = 0; i < 10; i += 1) {
+      await sleep(600);
+      if ((await hudProcessCount()) > 0) {
+        log('direct launch confirmed: DSH HUD is running');
+        return true;
+      }
+    }
+    log('direct launch: no DSH HUD process appeared within 6s');
+    return false;
+  }
+
+  /** Default launcher: direct spawn first, scheduled task only as fallback. */
+  async function ensureHudRunning() {
+    if ((await hudProcessCount()) > 0) return true;
+    if (!useTaskOnly()) {
+      if (await startHudDirect()) return true;
+      log('direct launch did not work; falling back to the scheduled task');
+    }
+    return startHudViaTask().catch(() => false);
+  }
+
+  /**
+   * 0.5.4 and older always registered `dsh-hud-launch`. Now that the default is
+   * a direct spawn, a leftover task is pure downside: a scheduled task pointing
+   * at an unsigned exe is exactly what AV vendors flag. Drop it when we are not
+   * in task mode (the fallback recreates it on demand).
+   */
+  async function removeLegacyLaunchTask() {
+    if (useTaskOnly()) return;
+    if (process.env.DSH_HUD_NO_LAUNCH_TASK === '1') return;
+    try {
+      const ps =
+        "$ErrorActionPreference = 'SilentlyContinue';" +
+        " if (Get-ScheduledTask -TaskName '" + LAUNCH_TASK + "' -ErrorAction SilentlyContinue)" +
+        " { Unregister-ScheduledTask -TaskName '" + LAUNCH_TASK + "' -Confirm:$false; 'removed' } else { 'absent' }";
+      const { out } = await runPowerShell(ps, 15_000);
+      if (out.trim() === 'removed') log('legacy launch task removed (direct launch is the default now)');
+    } catch (err) {
+      log('legacy launch task cleanup failed:', err?.message ?? err);
+    }
   }
 
   async function hudProcessCount() {

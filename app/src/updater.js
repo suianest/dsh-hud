@@ -56,8 +56,27 @@ function compareVersions(a, b) {
 
 const sha256 = (buffer) => crypto.createHash('sha256').update(buffer).digest('hex');
 
+/**
+ * Both requests must be bounded: an unbounded `fetch` on a network that
+ * accepts the TCP connection but never answers leaves the "检查更新" dialog
+ * spinning forever with no error (observed 2026-11-18: github.com direct hung
+ * past 3 minutes while node's fetch to the same URL finished in 0.7 s).
+ */
+const MANIFEST_TIMEOUT_MS = 15_000;
+const DOWNLOAD_TIMEOUT_MS = 120_000;
+
+/** AbortSignal.timeout on Node 18+/Electron 28+; degrade to no signal on old runtimes. */
+function timeoutSignal(ms) {
+  return typeof AbortSignal !== 'undefined' && typeof AbortSignal.timeout === 'function'
+    ? AbortSignal.timeout(ms)
+    : undefined;
+}
+
 async function readJsonFrom(url, fetchImpl) {
-  const res = await fetchImpl(url, { headers: { 'cache-control': 'no-cache' } });
+  const res = await fetchImpl(url, {
+    headers: { 'cache-control': 'no-cache' },
+    signal: timeoutSignal(MANIFEST_TIMEOUT_MS),
+  });
   if (!res || !res.ok) throw new Error('manifest HTTP ' + (res && res.status));
   const text = typeof res.text === 'function' ? await res.text() : '';
   const body = text ? JSON.parse(text) : await res.json();
@@ -120,7 +139,7 @@ async function checkForUpdate({ current, manifestUrl, sources, fetchImpl = globa
 
 /** Download + verify, then stage the file for the helper. */
 async function downloadUpdate({ asarUrl, sha256: expected, size: expectedSize, version, latest }, { destDir, fetchImpl = globalThis.fetch } = {}) {
-  const res = await fetchImpl(asarUrl);
+  const res = await fetchImpl(asarUrl, { signal: timeoutSignal(DOWNLOAD_TIMEOUT_MS) });
   if (!res || !res.ok) throw new Error('download HTTP ' + (res && res.status));
   const buf = Buffer.from(await res.arrayBuffer());
   // A truncated response would otherwise only fail at sha256 time with a

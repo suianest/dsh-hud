@@ -127,3 +127,26 @@ test('checkForUpdate falls back to the next source when the first one is reset',
   assert.equal(r.sha256, 'ab');
   assert.ok(calls.length >= 2);
 });
+
+test('both manifest and asar requests carry an abort signal (no unbounded fetch)', async () => {
+  // 2026-11-18: a direct github.com request hung past 3 minutes with no
+  // timeout, leaving "检查更新" spinning forever. Guard against that
+  // regression: every fetch must receive a signal.
+  const seen = [];
+  const payload = Buffer.from('ab');
+  const manifest = { version: '0.5.0', appAsar: { url: 'https://example.invalid/app.asar', sha256: sha(payload), size: payload.length } };
+  const fetchImpl = async (url, init) => {
+    seen.push({ url: String(url), signal: Boolean(init && init.signal) });
+    if (String(url).includes('app.asar')) {
+      return { ok: true, status: 200, arrayBuffer: async () => payload };
+    }
+    return { ok: true, status: 200, text: async () => JSON.stringify(manifest) };
+  };
+  const r = await updater.checkForUpdate({ current: '0.4.0', fetchImpl, manifestUrl: 'https://example.invalid/manifest.json' });
+  assert.equal(r.status, 'update');
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'dsh-hud-upd-top-'));
+  await updater.downloadUpdate(r, { destDir: dir, fetchImpl });
+  fs.rmSync(dir, { recursive: true, force: true });
+  assert.equal(seen.length, 2);
+  assert.ok(seen.every((c) => c.signal), 'every fetch must pass an AbortSignal');
+});

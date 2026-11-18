@@ -9,6 +9,29 @@
 - 插件（`plugin/package.json`）独立版本，改协议时双方 `protocolVersion` 必须对齐；
 - 每个版本的条目在发版前写好，正文直接复制进 GitHub Release。
 
+## [0.5.5] - 2026-11-18
+
+### Changed
+
+- 默认启动方式改为「插件直接 spawn 应用」，不再默认注册计划任务 `dsh-hud-launch`（P-13 根因：悟空等安全软件会把「计划任务自动拉起未签名 exe」判为可疑）。2026-11-18 复测确认：只要子进程带上 `--no-sandbox` 与可写 `--user-data-dir`，从 DSH 宿主直接 spawn 就能正常起来（此前 `0x80000003` 是子进程回落到共享 `%APPDATA%\Electron` 配置导致的）。
+- 计划任务降级为兜底：直接拉不起来时才回退；也可以用 `DSH_HUD_USE_TASK=1` 强制走计划任务，或在旧机器上排查时临时启用。
+
+### Fixed
+
+- 「检查更新」不再无限挂起：清单请求加 15 s 超时、asar 下载加 120 s 超时，超时会落到下一个清单源，全部失败则弹「检查更新失败」并带原因。2026-11-18 线上验收时观察到 github.com 直连在本机会卡住 3 分钟以上（同 URL 用 node 的 fetch 只要 0.7 s），旧代码没有任何超时，界面会一直停在“检查中”。
+- 新增单测守住这条：manifest 与 asar 两次 fetch 都必须带 `AbortSignal`。
+
+### Docs
+
+- README 的「安全软件拦截」章节说明新的默认启动方式，以及 `DSH_HUD_USE_TASK=1` 的用途。
+- 新增 `docs/roadmap.md`，记录未完成计划；本次把「代码签名」列为 R-1（P-13 长期方案，目标 0.6.x）。
+
+### Planned（未完成，见 `docs/roadmap.md`）
+
+- **R-1 代码签名**：本版只去掉了「计划任务自动拉起」这条会被判可疑的特征，**exe 仍未签名**，第一次运行仍可能被 SmartScreen / 悟空 / 360 / 火绒提示。解决方案（Azure Trusted Signing / OV / EV 证书）与构建链改造见 `docs/roadmap.md`。
+- **R-2 GitHub 路线换机验收**：npm 路线已通过；GitHub 路线需在目标机器先装 git。
+- **R-3 安装包瘦身**：当前 zip 158.6 MB，Electron 运行时占大头。
+
 ## [0.5.4] - 2026-11-18
 
 ### Fixed

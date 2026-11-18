@@ -1366,6 +1366,8 @@ class HudWindow {
       { id: 'open-dsh-panel', label: '打开 DSH 浮窗', run: () => this.showPanel() },
       { id: 'token-topup', label: 'Token 补充', run: () => this._openTokenWindow() },
       { id: 'check-update', label: '检查更新', run: () => this._checkUpdate().catch(() => {}) },
+      // 测试项：只验证「仓库改动 → 构建 → 运行中的面板」这条通路，不做任何事。
+      { id: 'test-entry', label: '测试', run: () => this._log('palette: 测试 clicked (no-op)') },
     ];
     const items = builtin.slice();
     try {
