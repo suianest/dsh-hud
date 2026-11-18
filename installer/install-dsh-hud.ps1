@@ -170,6 +170,10 @@ Say ''
 Say '  ----------------------------------------' DarkGray
 Say '  安装完成！' Green
 Say ''
+Say '  下一步：还要在 DSH 里装插件，否则面板连不上 DSH' Yellow
+Say '    DSH → 设置 → 插件 → 添加插件 → 填 dsh-hud-capsule（npm 包名）' DarkGray
+Say ''
+Say ''
 Say "  程序位置：$InstallDir" Gray
 Say "  启动方式：双击 $lnk" Gray
 Say '            （开始菜单里搜索 DSH HUD 也能找到）' DarkGray

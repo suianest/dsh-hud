@@ -1,6 +1,8 @@
 # 通过 npm 包名一键安装（流程摸底）
 
 > 状态：**已发布 0.5.3**（2026-11-17，<https://www.npmjs.com/package/dsh-hud-capsule>）。本文记录整条链路、staged publishing 的坑和验证结果。
+>
+> **这是推荐路线（README 路线 C）**：一个包名装完，应用包由插件自动下载。只有在自动下载失败、离线、或想看见全过程时才退回路线 A（`install-dsh-hud.cmd` 安装器）。
 
 ## 目标
 

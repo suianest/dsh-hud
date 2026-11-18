@@ -1,9 +1,9 @@
 {
-  "version": "0.5.2",
-  "notes": "下载链路修复：安装器与插件自动安装多镜像+断点续传，更新清单补 Release 附件兵底。",
+  "version": "0.5.4",
+  "notes": "",
   "appAsar": {
-    "url": "https://github.com/suianest/dsh-hud/releases/download/v0.5.2/app.asar",
-    "sha256": "b791cb7867c1e5fca3d32947570a990624977d91866c8331a66c4892a8a335ca",
-    "size": 509308
+    "url": "https://github.com/suianest/dsh-hud/releases/download/v0.5.4/app.asar",
+    "sha256": "105f3a5c72fac7b2f2b952248ba8545b76cdd275dfd6f8cc3c237ca9b6bfb45d",
+    "size": 509491
   }
 }

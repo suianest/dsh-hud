@@ -142,7 +142,7 @@ d.rectangle((0, 0, W, 14), fill=ACCENT)
 text(d, (90, 96), "DSH HUD", 26, ACCENT, True)
 text(d, (90, 148), "安装与运行流程", 62, INK, True)
 text(d, (90, 236), "Windows 常驻悬浮胶囊 · 把 DSH 变成桌面上的一个搜索框", 26, MUTED)
-text(d, (90, 286), "版本 0.4.1 · 2026-11-15 · Windows 10 1809+ / Windows 11 x64", 20, MUTED)
+text(d, (90, 286), "版本 0.5.4 · 2026-11-18 · Windows 10 1809+ / Windows 11 x64", 20, MUTED)
 
 cover = Image.open(os.path.join(imgdir, "install-cover-ai-a.jpg")).convert("RGB")
 cw, ch = W - 180, int((W - 180) * cover.height / cover.width)
@@ -272,14 +272,15 @@ y = table(d, 90, y + 96, [320, 740], [
     ["插件装好了找不到 HUD", "安装器默认装在 %LOCALAPPDATA%\\DSH HUD，插件会自动找到；改过路径就设 hudDir"],
     ["DSH 启动后胶囊没自动起", "计划任务 dsh-hud-launch 被禁：手动双击 lnk，或看插件日志 launch task ready"],
     ["检查更新报网络错误", "会依次尝试 raw / jsDelivr / Release 资产 / GitHub API，全失败才报错"],
+    ["第一次没出现胶囊", "悟空 / 360 / 火绒 可能拦未签名 exe：双击 DSH HUD.lnk 一次并点允许，或把安装目录加白名单"],
 ])
 
 text(d, (90, y + 46), "手动安装（离线 / 进阶）", 30, INK, True)
 rrect(d, (90, y + 96, W - 90, y + 268), 16, (247, 249, 253), BORDER)
-text(d, (116, y + 116), "1. 在 Release 里下载 DSH-HUD-0.4.1-win-x64.zip（约 151 MB）", 20, INK)
+text(d, (116, y + 116), "1. 在 Release 里下载 DSH-HUD-0.5.4-win-x64.zip（约 151 MB）", 20, INK)
 text(d, (116, y + 152), "2. 解压到任意有写权限的目录（推荐 %LOCALAPPDATA%\\DSH HUD）", 20, INK)
 text(d, (116, y + 188), "3. 双击目录里的 DSH HUD.lnk —— 不要双击 app\\DSH HUD.exe", 20, INK)
-text(d, (116, y + 230), "校验：certutil -hashfile \"DSH-HUD-0.4.1-win-x64.zip\" SHA256", 18, MUTED)
+text(d, (116, y + 230), "校验：certutil -hashfile \"DSH-HUD-0.5.4-win-x64.zip\" SHA256", 18, MUTED)
 
 text(d, (90, 1680), "仓库：github.com/suianest/dsh-hud    ·    问题反馈：Issues    ·    许可证：MIT", 19, MUTED)
 

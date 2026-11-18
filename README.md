@@ -4,7 +4,7 @@ Windows 常驻悬浮胶囊 + 520×720 紧凑面板（豆包式）。点胶囊或
 
 技术栈：Electron（44.7.0，随包分发）+ 一个很薄的 Cordis 插件（发现文件、计划任务拉起、登录自启、桌面/开始菜单快捷方式、IPC 桥、应用内更新源）。
 
-当前版本：**0.5.2**（[Release](https://github.com/suianest/dsh-hud/releases/latest)）
+当前版本：**0.5.4**（[Release](https://github.com/suianest/dsh-hud/releases/latest)）
 
 ## 截图
 
@@ -44,19 +44,37 @@ Windows 常驻悬浮胶囊 + 520×720 紧凑面板（豆包式）。点胶囊或
 
 ---
 
-## 三条安装路线（都保留，任选其一）
+## 四条安装路线（按推荐顺序）
 
-| 路线 | 适合谁 | 怎么做 | 应用包 |
+| 路线 | 适合谁 | 怎么做 | 需要 git |
 |---|---|---|---|
-| **A · 便携版** | 只要桌面胶囊，不想碰插件 | 下载 `install-dsh-hud.cmd` 双击，或解压 zip 后双击 `DSH HUD.lnk` | 安装器自动下载 |
-| **B · GitHub 仓库装插件** | 有 git、想用仓库版（推荐开发者） | DSH 添加插件填 `github:suianest/dsh-hud`（或本地目录 `D:\...\dsh-hud`） | 插件首次运行自动下载 |
-| **C · npm 包名装插件** | 只想填一个名字 | 填 `dsh-hud-capsule`（[npm 已发布 0.5.3](https://www.npmjs.com/package/dsh-hud-capsule)） | 插件首次运行自动下载 |
+| **C · npm 包名**（首选） | 绝大多数人 | DSH → 设置 → 插件 → 添加 → 填 `dsh-hud-capsule`（[npm 0.5.3](https://www.npmjs.com/package/dsh-hud-capsule)），应用包随后自动下载 | 否 |
+| **A · 便携版 / 安装器** | 自动安装失败、离线、想看见全过程 | 下载 `install-dsh-hud.cmd` 双击，或解压 zip 后双击 `DSH HUD.lnk` | 否 |
+| **B1 · GitHub 仓库** | 开发者 | 填 `github:suianest/dsh-hud` | **是**（pnpm 内部 `git clone`） |
+| **B2 · 本地目录** | 开发者 / 没装 git 也想用仓库版 | 下载仓库 zip 解压，填解压后的绝对路径（如 `D:\DSH\dsh-hud`） | 否 |
 
-- **A** 见下一节；**B/C** 见「形态 B」。
-- B 需要本机有 `git`（仓库自带 `installer\...` 不含 git，需自行安装或使用本文档附带的 PortableGit 说明）；C 直接走 npm registry（见 `docs/install-via-npm.md`）。
-- 三条路线可以混用：先装便携版再装插件，插件会直接识别已有安装；反过来也行。
+- **普通用户只看 C**：一个字段装完，插件自己下应用包、自己校验、自己拉起胶囊。
+- **A 是兜底**：C 走不通（公司网络、杀软拦自动下载、`LOCALAPPDATA` 没权限）时用；装完仍需在 DSH 里装插件 C，否则面板连不上 DSH。
+- **B 面向开发者**：B1 要 `git`；B2 不需要 git，但要自己下载解压 zip。
+- 四条路线可以混用：先装便携版再装插件，插件会直接识别已有安装；反过来也行。
 
-## 形态 A · 便携版（最简单）
+## 安全软件拦截（悟空 / 360 / 火绒 / Defender）
+
+**现象**：插件装好了，但桌面一直不出现胶囊；或第一次出现后，下次开机又没了。日志里可能只有一行 `launched` 而没有后续。
+
+**原因**：`DSH HUD.exe` 没有代码签名，而它是被后台自动拉起的（计划任务 / 登录启动项），这是国产安全软件判定「可疑」的两条典型特征。DSH 本体是签过名的，HUD 不是。
+
+**处理（任选）**：
+
+1. 手动双击一次安装目录里的 `DSH HUD.lnk`，弹窗选「允许 / 信任 / 放行」，之后一般不再拦；
+2. 在安全软件里把整个安装目录（如 `%LOCALAPPDATA%\DSH HUD`）加进白名单/信任区；
+3. 不想动安全软件设置时，关掉自动拉起、每次手动开：
+   - DSH 侧：右键胶囊 → 取消「开机自启」；
+   - 或用环境变量 `DSH_HUD_NO_AUTOSTART=1`、`DSH_HUD_NO_AUTO_INSTALL=1` 启动 DSH。
+
+插件在拉起失败时会往 `%LOCALAPPDATA%\dsh-hud\hud.log` 写一行提示（0.5.4 起），看到那句话就按上面处理。
+
+## 形态 A · 便携版（离线 / 兜底，无需 git）
 
 **一键安装（推荐）**
 
@@ -82,15 +100,17 @@ Windows 常驻悬浮胶囊 + 520×720 紧凑面板（豆包式）。点胶囊或
 2. 在 DSH 里安装插件（插件管理界面填仓库地址，或命令行）：
 
    ```bash
-   # ① GitHub 仓库（需要 git）
+   # B1 · GitHub 仓库（需要本机有 git）
    plugin_manager install_bundle github:suianest/dsh-hud
-   # ② 本地目录（填仓库或解压后的目录）
+   # B2 · 本地目录（不需要 git：先下 zip 解压，再填解压后的目录）
    plugin_manager install_bundle D:\path\to\dsh-hud
-   # ③ npm 包名（已发布）
+   # C · npm 包名（已发布，推荐）
    plugin_manager install_bundle dsh-hud-capsule
    ```
 
-   > `suianest/dsh-hud` 这种写法**不被识别**：DSH 只接受绝对路径、`github:`/`git:` 这类 git 形式、或合法 npm 名（详见 `docs/install-via-npm.md`）。
+   > `suianest/dsh-hud` 这种裸写法**不被识别**：DSH 只接受绝对路径、`github:`/`git:` 这类 git 形式、或合法 npm 名（详见 `docs/install-via-npm.md`）。
+   >
+   > **没装 git 就用 B2**：下载 <https://github.com/suianest/dsh-hud/archive/refs/heads/main.zip>（国内可用 `https://gh-proxy.com/` 前缀），解压后填**解压出来的那一层目录**（里面有 `cordis.patch.yml` 和 `plugin/`）。
 
 3. 插件负责：写 `%LOCALAPPDATA%\dsh-hud\discovery.json`（每 15s 刷新）、注册计划任务 `dsh-hud-launch`、写登录启动项、代建桌面与开始菜单快捷方式、处理 `/dsh-hud` 命令与 IPC 桥。
    **首次定位到打包版 HUD 时，插件会自动写一次登录启动项**（`Startup\dsh-hud.cmd`），并在同目录记下 `autostart.json`（`by: plugin-first-run`）——之后在右键菜单里关掉「开机自启」就不会被重新装上。想跳过这次自动安装，启动 DSH 前设 `DSH_HUD_NO_AUTOSTART=1`。

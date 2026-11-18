@@ -90,6 +90,15 @@ const DEFAULT_MAX_RESPAWNS = 5;
 // not permanently disable auto-restart.
 const STABLE_MS = 30_000;
 
+// P-13: an unsigned exe that a background process launches can be frozen by
+// Chinese AV suites (悟空/360/火绒/Defender) with no error at all — the user
+// just sees "nothing happened". Whenever a launch fails or the child dies
+// right away, say this instead of failing silently.
+const LAUNCH_BLOCKED_HINT =
+  'DSH HUD 没有起来时，多半是被安全软件（悟空/360/火绒/Windows Defender）拦截了：' +
+  '把 DSH HUD.exe 加进信任/白名单，或手动双击安装目录里的 DSH HUD.lnk 启动一次；' +
+  '详见 README 的「安全软件拦截」一节';
+
 function hudDir() {
   const base = process.env.LOCALAPPDATA;
   if (!base) throw new Error('LOCALAPPDATA is not set on this platform');
@@ -783,11 +792,13 @@ export function apply(ctx, config = {}) {
       });
     } catch (err) {
       log('spawn failed:', err?.message ?? err);
+      log(LAUNCH_BLOCKED_HINT);
       child = null;
       return;
     }
 
     const handle = child;
+    const spawnedAt = Date.now();
     const pipe = (name) => {
       const stream = handle && handle[name];
       if (!stream || typeof stream.on !== 'function') {
@@ -817,6 +828,10 @@ export function apply(ctx, config = {}) {
         child = null;
         if (disposed) return;
         log('HUD exited:', JSON.stringify(outcome));
+        if (Date.now() - spawnedAt < 5_000 && outcome && outcome.code !== 0) {
+          // Died within 5s: almost always a policy/AV block rather than a crash.
+          log(LAUNCH_BLOCKED_HINT);
+        }
         // Exit 0 means the app quit on purpose: either the user closed it, or we
         // handed off to an already-running instance (single-instance lock). In
         // both cases respawning would fight the user / thrash the lock, so stop.
@@ -1338,6 +1353,8 @@ const PROTOCOL_VERSION = 1;
       await sleep(600);
       if ((await hudProcessCount()) > 0) return true;
     }
+    log('launch task ran but no DSH HUD process appeared');
+    log(LAUNCH_BLOCKED_HINT);
     return false;
   }
 
