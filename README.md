@@ -4,7 +4,7 @@ Windows 常驻悬浮胶囊 + 520×720 紧凑面板（豆包式）。点胶囊或
 
 技术栈：Electron（44.7.0，随包分发）+ 一个很薄的 Cordis 插件（发现文件、计划任务拉起、登录自启、桌面/开始菜单快捷方式、IPC 桥、应用内更新源）。
 
-当前版本：**0.5.6**（[Release](https://github.com/suianest/dsh-hud/releases/latest)）
+当前版本：**0.5.7**（[Release](https://github.com/suianest/dsh-hud/releases/latest)）
 
 ## 截图
 

@@ -9,6 +9,25 @@
 - 插件（`plugin/package.json`）独立版本，改协议时双方 `protocolVersion` 必须对齐；
 - 每个版本的条目在发版前写好，正文直接复制进 GitHub Release。
 
+## [0.5.7] - 2026-11-20
+
+### Changed
+
+- **安装包瘦身**：Electron 自带 55 个语言包（约 49 MB），只保留 `en-US` / `zh-CN` / `zh-TW`
+  三个（Chromium 找不到对应语言包会自动回落 en-US）。
+- 压缩改走 .NET `ZipArchive` 的 `SmallestSize`（比 `Compress-Archive -CompressionLevel Optimal` 更小），
+  并且先从 `win-unpacked` 用 `robocopy /XJ` 拷一份不含 junction 的临时副本再压
+  （直接压会把 `app/resources/artifacts` 这个开发用 junction 展开成上 GB 的无用文件）。
+
+### Removed
+
+- 命令面板里的临时条目「测试」（0.5.5 起用于验证「仓库改动 → 构建 → 面板」链路），连通性自检由
+  「检查更新」与插件更新提示覆盖。
+
+### Notes
+
+- 本版是「中版」起点：功能面收敛，后续按用户体验反馈再出终版（见 `docs/roadmap.md`）。
+
 ## [0.5.6] - 2026-11-20
 
 ### Added

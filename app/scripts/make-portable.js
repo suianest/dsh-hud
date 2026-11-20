@@ -206,40 +206,117 @@ function writeReadme() {
   return file;
 }
 
+// Minimal deterministic zip writer (deflate level 9, UTF-8 names, no zip64).
+// Compress-Archive is slow and cannot exclude junctions reliably; this keeps
+// the archive byte-stable across builds and skips reparse points by design.
+function crc32Table() {
+  const table = new Int32Array(256);
+  for (let i = 0; i < 256; i++) {
+    let c = i;
+    for (let k = 0; k < 8; k++) c = c & 1 ? 0xedb88320 ^ (c >>> 1) : c >>> 1;
+    table[i] = c;
+  }
+  return table;
+}
+
+function writeZipArchive(srcDir, zipPath) {
+  const zlib = require('zlib');
+  const table = crc32Table();
+  const crc32 = (buf) => {
+    let c = -1;
+    for (let i = 0; i < buf.length; i++) c = table[(c ^ buf[i]) & 0xff] ^ (c >>> 8);
+    return (c ^ -1) >>> 0;
+  };
+  const dosTime = (date) => {
+    const time = ((date.getHours() << 11) | (date.getMinutes() << 5) | (date.getSeconds() >> 1)) & 0xffff;
+    const day = (((date.getFullYear() - 1980) << 9) | ((date.getMonth() + 1) << 5) | date.getDate()) & 0xffff;
+    return { time, day };
+  };
+  const files = [];
+  const walk = (dir, prefix) => {
+    for (const name of fs.readdirSync(dir).sort()) {
+      const abs = path.join(dir, name);
+      const rel = prefix ? `${prefix}/${name}` : name;
+      const st = fs.lstatSync(abs);
+      if (st.isSymbolicLink()) continue; // dev-only junction (resources/artifacts)
+      if (st.isDirectory()) walk(abs, rel);
+      else if (st.isFile()) files.push({ abs, rel, size: st.size, mtime: st.mtime });
+    }
+  };
+  walk(srcDir, '');
+  const fd = fs.openSync(zipPath, 'w');
+  const central = [];
+  let offset = 0;
+  for (const f of files) {
+    const raw = fs.readFileSync(f.abs);
+    const deflated = zlib.deflateRawSync(raw, { level: 9 });
+    const useDeflate = deflated.length < raw.length;
+    const data = useDeflate ? deflated : raw;
+    const name = Buffer.from(f.rel, 'utf8');
+    const crc = crc32(raw);
+    const { time, day } = dosTime(f.mtime);
+    const local = Buffer.alloc(30);
+    local.writeUInt32LE(0x04034b50, 0);
+    local.writeUInt16LE(20, 4);             // version needed
+    local.writeUInt16LE(0x0800, 6);         // UTF-8 names
+    local.writeUInt16LE(useDeflate ? 8 : 0, 8);
+    local.writeUInt16LE(time, 10);
+    local.writeUInt16LE(day, 12);
+    local.writeUInt32LE(crc, 14);
+    local.writeUInt32LE(data.length, 18);
+    local.writeUInt32LE(raw.length, 22);
+    local.writeUInt16LE(name.length, 26);
+    local.writeUInt16LE(0, 28);
+    fs.writeSync(fd, local);
+    fs.writeSync(fd, name);
+    fs.writeSync(fd, data);
+    central.push({ name, crc, comp: data.length, size: raw.length, offset, time, day, method: useDeflate ? 8 : 0 });
+    offset += local.length + name.length + data.length;
+  }
+  const cdStart = offset;
+  for (const c of central) {
+    const h = Buffer.alloc(46);
+    h.writeUInt32LE(0x02014b50, 0);
+    h.writeUInt16LE(20, 4);
+    h.writeUInt16LE(20, 6);
+    h.writeUInt16LE(0x0800, 8);
+    h.writeUInt16LE(c.method, 10);
+    h.writeUInt16LE(c.time, 12);
+    h.writeUInt16LE(c.day, 14);
+    h.writeUInt32LE(c.crc, 16);
+    h.writeUInt32LE(c.comp, 20);
+    h.writeUInt32LE(c.size, 24);
+    h.writeUInt16LE(c.name.length, 28);
+    h.writeUInt32LE(c.offset, 42);
+    fs.writeSync(fd, h);
+    fs.writeSync(fd, c.name);
+    offset += h.length + c.name.length;
+  }
+  const end = Buffer.alloc(22);
+  end.writeUInt32LE(0x06054b50, 0);
+  end.writeUInt16LE(central.length, 8);
+  end.writeUInt16LE(central.length, 10);
+  end.writeUInt32LE(offset - cdStart, 12);
+  end.writeUInt32LE(cdStart, 16);
+  fs.writeSync(fd, end);
+  fs.closeSync(fd);
+  return { files: files.length, bytes: fs.statSync(zipPath).size };
+}
+
 function writeZip() {
   const pkg = JSON.parse(fs.readFileSync(path.join(APP_DIR, 'package.json'), 'utf8'));
   const zipPath = path.join(ROOT, 'dist', `DSH-HUD-${pkg.version}-win-x64.zip`);
-  // Compress-Archive does not follow junctions (verified: total=77, no
-  // artifacts\** entries), so the IPC junction can stay attached.
   // Runtime state must never ship: boot.log / udd are per-machine artifacts.
   for (const junk of [path.join(OUT_DIR, 'app', 'boot.log'), path.join(OUT_DIR, 'udd')]) {
-    try { fs.rmSync(junk, { recursive: true, force: true }); } catch { /* locked: retried below */ }
+    try { fs.rmSync(junk, { recursive: true, force: true }); } catch { /* locked */ }
   }
-  // A running HUD recreates udd/ (Chromium cache: profile, GPU shader cache).
-  // Shipping it bloats the zip (~13 MB) and leaks per-machine data, so refuse
-  // instead of silently packaging caches.
   if (fs.existsSync(path.join(OUT_DIR, 'udd'))) {
     throw new Error('udd/ re-appeared (a DSH HUD instance is running) — stop it and rebuild, or the zip would ship Chromium caches');
   }
   try {
     fs.rmSync(zipPath, { force: true });
-    const ps = [
-      "$ErrorActionPreference = 'Stop';",
-      `Compress-Archive -Path '${path.join(OUT_DIR, '*').replace(/'/g, "''")}'`,
-      `-DestinationPath '${zipPath.replace(/'/g, "''")}' -CompressionLevel Optimal -Force`,
-    ].join(' ');
-    const run = () => require('child_process').execFileSync('powershell.exe', ['-NoProfile', '-NonInteractive', '-Command', ps], {
-      stdio: ['ignore', 'pipe', 'pipe'],
-    });
-    try {
-      run();
-    } catch (first) {
-      // A just-killed HUD can hold the exe/dll handles for a moment.
-      require('child_process').execFileSync('powershell.exe', ['-NoProfile', '-Command', 'Start-Sleep -Milliseconds 900']);
-      run();
-    }
-    if (!fs.existsSync(zipPath)) throw new Error('Compress-Archive produced no file');
-    console.log('[make-portable] zip:', zipPath, `${fs.statSync(zipPath).size} bytes`);
+    const result = writeZipArchive(OUT_DIR, zipPath);
+    console.log('[make-portable] zip:', zipPath, `${result.bytes} bytes (${(result.bytes / 1048576).toFixed(1)} MB), ${result.files} entries`);
     return zipPath;
   } catch (err) {
     console.error('[make-portable] zip failed (win-unpacked is still usable):', err && err.message);
@@ -286,6 +363,23 @@ async function main() {
   rmrf(OUT_DIR);
   console.log('[make-portable] copying Electron dist (runtime 44.7.0) ...');
   copyDir(ELECTRON_DIST, APP_OUT_DIR);
+
+  // 2b. 瘦身：Electron 自带 55 个语言包（约 49 MB）。HUD 只服务中文/英文用户，
+  //     Chromium 在没有对应 .pak 时会回落到 en-US，所以保留少量即可。
+  const KEEP_LOCALES = new Set(['en-US.pak', 'zh-CN.pak', 'zh-TW.pak']);
+  const localesDir = path.join(APP_OUT_DIR, 'locales');
+  if (fs.existsSync(localesDir)) {
+    const removed = [];
+    let freed = 0;
+    for (const name of fs.readdirSync(localesDir)) {
+      if (KEEP_LOCALES.has(name)) continue;
+      const file = path.join(localesDir, name);
+      freed += fs.statSync(file).size;
+      fs.rmSync(file, { force: true });
+      removed.push(name);
+    }
+    console.log(`[make-portable] locales pruned: kept ${KEEP_LOCALES.size}, removed ${removed.length} (${(freed / 1048576).toFixed(1)} MB)`);
+  }
 
   // 3. 打包 app.asar
   const asarPath = path.join(APP_OUT_DIR, 'resources', 'app.asar');
