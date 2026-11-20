@@ -41,7 +41,7 @@
  *   - newline-delimited JSON on the child's stdin (stdio.stdin: 'pipe'):
  *     { "type": "reload" | "show" | "hide" | "toggle", "seq": N }
  */
-import { mkdir, writeFile, rename, rm, readdir, stat } from 'node:fs/promises';
+import { mkdir, writeFile, rename, rm, readdir, readFile, stat } from 'node:fs/promises';
 import { appendFileSync, createReadStream, createWriteStream, existsSync, readFileSync, renameSync, statSync } from 'node:fs';
 import { createHash } from 'node:crypto';
 import { Readable } from 'node:stream';
@@ -94,6 +94,14 @@ const STABLE_MS = 30_000;
 // Chinese AV suites (悟空/360/火绒/Defender) with no error at all — the user
 // just sees "nothing happened". Whenever a launch fails or the child dies
 // right away, say this instead of failing silently.
+// P-14(A): the plugin never replaces its own files. DSH loads plugin code once
+// per process (a self-update would still need a DSH restart), and pnpm owns
+// node_modules (it would restore the tree on the next install). So the plugin
+// only *notices* a newer npm release and hands the hint to the HUD.
+const NPM_LATEST_URL = 'https://registry.npmjs.org/dsh-hud-capsule/latest';
+const PLUGIN_UPDATE_CHECK_MS = 6 * 60 * 60 * 1000;
+const PLUGIN_UPDATE_TIMEOUT_MS = 10_000;
+
 const LAUNCH_BLOCKED_HINT =
   'DSH HUD 没有起来时，多半是被安全软件（悟空/360/火绒/Windows Defender）拦截了：' +
   '把 DSH HUD.exe 加进信任/白名单，或手动双击安装目录里的 DSH HUD.lnk 启动一次；' +
@@ -111,6 +119,37 @@ function discoveryFile() {
 
 function controlFile() {
   return path.join(hudDir(), 'control.json');
+}
+
+function pluginUpdateFile() {
+  return path.join(hudDir(), 'plugin-update.json');
+}
+
+// This bundle's own version: <repo>/plugin/index.js → <repo>/package.json.
+function pluginVersion() {
+  try {
+    const pkg = JSON.parse(readFileSync(path.join(REPO_ROOT, 'package.json'), 'utf8'));
+    return typeof pkg.version === 'string' ? pkg.version : null;
+  } catch {
+    return null;
+  }
+}
+
+function versionParts(v) {
+  return String(v || '')
+    .split('.')
+    .map((n) => parseInt(n, 10) || 0);
+}
+
+function isNewerVersion(a, b) {
+  const x = versionParts(a);
+  const y = versionParts(b);
+  for (let i = 0; i < Math.max(x.length, y.length); i++) {
+    const da = x[i] || 0;
+    const db = y[i] || 0;
+    if (da !== db) return da > db;
+  }
+  return false;
 }
 
 function portOf(urlString) {
@@ -541,6 +580,50 @@ export function apply(ctx, config = {}) {
     return d;
   };
 
+  // P-14(A): notice a newer npm release and tell the HUD. Never replaces files:
+  // DSH has already loaded this module, and pnpm owns node_modules.
+  const checkPluginUpdate = async ({ force = false } = {}) => {
+    const current = pluginVersion();
+    if (!current) return null;
+    let state = {};
+    try {
+      state = JSON.parse(await readFile(pluginUpdateFile(), 'utf8'));
+    } catch {
+      state = {};
+    }
+    const now = Date.now();
+    const lastAt = state.lastCheckAt ? Date.parse(state.lastCheckAt) : 0;
+    if (!force && lastAt && now - lastAt < PLUGIN_UPDATE_CHECK_MS) return state;
+
+    let latest = null;
+    try {
+      const res = await fetch(NPM_LATEST_URL, { signal: AbortSignal.timeout(PLUGIN_UPDATE_TIMEOUT_MS) });
+      if (res.ok) {
+        const body = await res.json();
+        if (body && typeof body.version === 'string') latest = body.version;
+      }
+    } catch (err) {
+      log('plugin update check failed:', err?.message ?? err);
+    }
+
+    const next = {
+      lastCheckAt: new Date(now).toISOString(),
+      current,
+      latest: latest || state.latest || null,
+    };
+    if (next.latest && isNewerVersion(next.latest, current) && state.notifiedFor !== next.latest) {
+      next.notifiedFor = next.latest;
+      sendControl('plugin-update', { current, latest: next.latest });
+      log(`plugin update available: ${current} -> ${next.latest}`);
+    }
+    try {
+      await writeFile(pluginUpdateFile(), JSON.stringify(next, null, 2), 'utf8');
+    } catch (err) {
+      log('plugin update state write failed:', err?.message ?? err);
+    }
+    return next;
+  };
+
   // Remove leftover *.tmp files (from a previous crashed write) in the HUD dir.
   // Stale-only: a fresh tmp may be owned by a write that is still running, and
   // deleting it turns that write's rename into ENOENT (t16 B1).
@@ -587,7 +670,7 @@ export function apply(ctx, config = {}) {
   };
 
   // --- control notifications ----------------------------------------------
-  const sendControl = (action) => {
+  const sendControl = (action, data) => {
     // The seq must be monotonic ACROSS plugin reloads: the HUD persists its
     // lastSeq and drops anything <= it, so restarting at 1 after a DSH restart
     // would silently swallow the first n commands (t13 #1). Date.now() jumps
@@ -595,6 +678,7 @@ export function apply(ctx, config = {}) {
     controlSeq = Math.max(controlSeq + 1, Date.now());
     const seq = controlSeq;
     const payload = { seq, action, at: new Date().toISOString() };
+    if (data && typeof data === 'object') payload.data = data;
     // Unique tmp name (pid + seq) so concurrent writes never collide on the
     // same temp file and never rename a path another writer already renamed
     // (t8 D2: was a shared control.json.tmp → ENOENT under concurrency).
@@ -612,7 +696,7 @@ export function apply(ctx, config = {}) {
 
     if (child && child.stdin && !child.stdin.destroyed) {
       try {
-        child.stdin.write(`${JSON.stringify({ action, seq })}\n`);
+        child.stdin.write(`${JSON.stringify(data ? { action, seq, data } : { action, seq })}\n`);
       } catch (err) {
         log('control stdin write failed:', err?.message ?? err);
       }
@@ -1521,6 +1605,19 @@ const PROTOCOL_VERSION = 1;
     }
   }, IPC_POLL_MS);
 
+  let updateTimer = null;
+  let updateKickTimer = null;
+  if (process.env.DSH_HUD_NO_PLUGIN_UPDATE !== '1') {
+    const kick = () => {
+      if (disposed) return;
+      void checkPluginUpdate().catch((err) => log('plugin update check failed:', err?.message ?? err));
+    };
+    updateKickTimer = setTimeout(kick, 10_000);
+    updateTimer = setInterval(kick, PLUGIN_UPDATE_CHECK_MS);
+    if (updateTimer.unref) updateTimer.unref();
+    if (updateKickTimer.unref) updateKickTimer.unref();
+  }
+
   const timer = setInterval(() => {
     if (disposed) return;
     void writeDiscovery()
@@ -1533,6 +1630,8 @@ const PROTOCOL_VERSION = 1;
     disposed = true;
     clearInterval(timer);
     clearInterval(ipcTimer);
+    if (updateTimer) clearInterval(updateTimer);
+    if (updateKickTimer) clearTimeout(updateKickTimer);
     if (respawnTimer) clearTimeout(respawnTimer);
     clearStable();
     abort.abort();

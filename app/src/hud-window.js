@@ -59,6 +59,18 @@ function diag(msg) {
   } catch (_) { /* best effort */ }
 }
 
+// "0.5.6" > "0.5.5"; pre-release suffixes compare as their numeric prefix.
+function isNewerVersion(candidate, current) {
+  const parse = (v) => String(v || '0').replace(/^v/i, '').split('.').map((n) => parseInt(n, 10) || 0);
+  const a = parse(candidate);
+  const b = parse(current);
+  for (let i = 0; i < Math.max(a.length, b.length); i++) {
+    const d = (a[i] || 0) - (b[i] || 0);
+    if (d !== 0) return d > 0;
+  }
+  return false;
+}
+
 class HudWindow {
   constructor() {
     // Portable config (t26): env DSH_HUD_* -> config.local.json -> detect ->
@@ -85,6 +97,7 @@ class HudWindow {
     this._paletteOpen = false; // command palette overlay is visible (t35)
     this._panelUserSize = null; // last panel size the user dragged to (t38 B1)
     this._paletteItems = null; // Map<id, run()> for the open palette (t35)
+    this._pluginUpdate = null; // {current, latest} from the host plugin (P-14 A)
   }
 
   // True when transparent mode is active. DSH_HUD_OPAQUE=1 forces the opaque
@@ -1101,12 +1114,42 @@ class HudWindow {
     return this._clamp({ x, y, width: size.width, height: size.height }, wa);
   }
 
+  // The host plugin only *notices* a newer npm release (P-14 A). Keep it in
+  // memory and surface a badge + one palette entry; nothing is auto-installed.
+  setPluginUpdate(data) {
+    const latest = data && typeof data.latest === 'string' ? data.latest : null;
+    const current = data && typeof data.current === 'string' ? data.current : null;
+    if (!latest) return;
+    // Defence in depth: the plugin already filters, but never advertise a
+    // version we are not actually behind (or a downgrade).
+    if (current && !isNewerVersion(latest, current)) {
+      this._log(`plugin update ignored: current=${current} latest=${latest}`);
+      if (this._pluginUpdate) {
+        this._pluginUpdate = null;
+        this._emitState();
+      }
+      return;
+    }
+    this._pluginUpdate = { current, latest };
+    this._log(`plugin update: current=${current} latest=${latest}`);
+    this._emitState();
+  }
+
+  _copyPluginGuide() {
+    const latest = this._pluginUpdate ? this._pluginUpdate.latest : 'latest';
+    const text = `pnpm add dsh-hud-capsule@${latest}`;
+    try { clipboard.writeText(text); } catch { /* no clipboard */ }
+    this._log(`palette: plugin update guide copied (${text})`);
+    this._closePalette();
+  }
+
   _emitState() {
     if (this.win && !this.win.isDestroyed()) {
-      this.win.webContents.send('hud:state', {
-        mode: this.mode,
-        opaque: !this.isTransparent(),
-      });
+      const payload = { mode: this.mode, opaque: !this.isTransparent() };
+      // Only present when the host plugin reported a newer npm release, so the
+      // common payload keeps its original shape (tests + renderer both rely on it).
+      if (this._pluginUpdate) payload.pluginUpdate = this._pluginUpdate;
+      this.win.webContents.send('hud:state', payload);
     }
   }
 
@@ -1369,6 +1412,13 @@ class HudWindow {
       // 测试项：只验证「仓库改动 → 构建 → 运行中的面板」这条通路，不做任何事。
       { id: 'test-entry', label: '测试', run: () => this._log('palette: 测试 clicked (no-op)') },
     ];
+    if (this._pluginUpdate) {
+      builtin.push({
+        id: 'plugin-update',
+        label: `插件有新版本 v${this._pluginUpdate.latest}（复制升级命令）`,
+        run: () => this._copyPluginGuide(),
+      });
+    }
     const items = builtin.slice();
     try {
       extensionMenuItems({ hud: this }).forEach((item, i) => {

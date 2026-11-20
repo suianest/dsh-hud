@@ -223,6 +223,19 @@ html[data-hud-theme="light"] .panel-header {
   outline-offset: 1px;
 }
 .panel-btn:active { background: var(--btn-bg-active); }
+/* P-14(A): a newer npm release of the host plugin exists — a small dot on ⌘. */
+.panel-btn.has-update { position: relative; }
+.panel-btn.has-update::after {
+  content: '';
+  position: absolute;
+  top: 3px;
+  right: 3px;
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: #f59e0b;
+  box-shadow: 0 0 0 1.5px var(--panel-bg, #1e2130);
+}
 .panel-btn.danger:hover { background: var(--danger-hover); }
 
 .panel-body {

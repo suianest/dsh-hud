@@ -352,6 +352,7 @@
 
   let paintedMode = null;
   hud.onState((state) => {
+    if (panelCommand) panelCommand.classList.toggle('has-update', !!(state && state.pluginUpdate));
     setMode(state.mode);
     body.classList.toggle('opaque', !!state.opaque);
     if (state.mode !== paintedMode) {

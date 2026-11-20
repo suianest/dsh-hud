@@ -817,3 +817,71 @@ test('the reveal falls back to a timer if the paint ack never arrives', async ()
   await delay(220);
   assert.equal(win.opacity, 1, 'fallback timer must never leave the window invisible');
 });
+
+test('a host plugin update surfaces as state + a palette entry, and copies the guide (P-14 A)', () => {
+  const ctx = setup({ discovery: freshDiscovery() });
+  const { hud, win } = boot(ctx);
+
+  hud.showPanel();
+  hud.setPluginUpdate({ current: '0.5.5', latest: '0.5.6' });
+
+  const stateMsgs = win.webContents.sent.filter((m) => m.channel === 'hud:state');
+  const last = stateMsgs[stateMsgs.length - 1];
+  assert.deepEqual(
+    last && last.payload && last.payload.pluginUpdate,
+    { current: '0.5.5', latest: '0.5.6' },
+    'state carries the pending update so the renderer can badge the button'
+  );
+
+  hud._openPalette();
+  const openMsg = win.webContents.sent.filter((m) => m.channel === 'hud:palette-open').pop();
+  const items = (openMsg && openMsg.payload && openMsg.payload.items) || [];
+  const updateItem = items.find((it) => it.id === 'plugin-update');
+  assert.ok(updateItem, 'palette gets a plugin-update entry');
+  assert.match(updateItem.label, /v0\.5\.6/, 'the entry names the newer version');
+
+  ctx.mock.ipcMain.emit('hud:palette-exec', {}, { id: 'plugin-update' });
+  assert.deepEqual(
+    ctx.mock._clipboardText,
+    ['pnpm add dsh-hud-capsule@0.5.6'],
+    'the upgrade command lands on the clipboard'
+  );
+  assert.equal(hud._paletteOpen, false, 'running the entry closes the palette');
+});
+
+test('a plugin update only appears when the host reports one (no empty entry)', () => {
+  const ctx = setup({ discovery: freshDiscovery() });
+  const { hud, win } = boot(ctx);
+  hud.showPanel();
+
+  hud.setPluginUpdate({ latest: '' });
+  hud._openPalette();
+  const openMsg = win.webContents.sent.filter((m) => m.channel === 'hud:palette-open').pop();
+  const items = (openMsg && openMsg.payload && openMsg.payload.items) || [];
+  assert.equal(items.some((it) => it.id === 'plugin-update'), false, 'nothing to update, nothing to show');
+
+  const stateMsgs = win.webContents.sent.filter((m) => m.channel === 'hud:state');
+  const last = stateMsgs[stateMsgs.length - 1];
+  assert.equal(last && last.payload && 'pluginUpdate' in last.payload, false, 'state keeps its plain shape');
+});
+
+test('an older or equal "latest" is ignored, and previously shown updates are cleared', () => {
+  const ctx = setup({ discovery: freshDiscovery() });
+  const { hud, win } = boot(ctx);
+  hud.showPanel();
+
+  hud.setPluginUpdate({ current: '0.5.5', latest: '0.5.6' });
+  hud.setPluginUpdate({ current: '0.5.5', latest: '0.5.5' });
+  const last = win.webContents.sent.filter((m) => m.channel === 'hud:state').pop();
+  assert.equal(
+    last && last.payload && 'pluginUpdate' in last.payload,
+    false,
+    'equal versions clear the badge instead of advertising a version we are not behind'
+  );
+
+  hud.setPluginUpdate({ current: '0.5.5', latest: '0.5.4' });
+  hud._openPalette();
+  const openMsg = win.webContents.sent.filter((m) => m.channel === 'hud:palette-open').pop();
+  const items = (openMsg && openMsg.payload && openMsg.payload.items) || [];
+  assert.equal(items.some((it) => it.id === 'plugin-update'), false, 'downgrades never get an entry');
+});

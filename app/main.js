@@ -173,6 +173,10 @@ if (!gotLock) {
         reload: () => { if (hud) hud.reloadWeb(); },
         // /dsh-hud off → graceful exit (plugin waits for the process to go away).
         quit: () => { app.quit(); },
+        // P-14(A): the plugin noticed a newer npm release; surface it in the HUD.
+        'plugin-update': (obj) => {
+          if (hud && obj && obj.data) hud.setPluginUpdate(obj.data);
+        },
       },
       { statePath: path.join(app.getPath('userData'), 'control-state.json') }
     );

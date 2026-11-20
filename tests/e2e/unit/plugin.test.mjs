@@ -26,6 +26,8 @@ import { pathToFileURL } from 'node:url';
 process.env.DSH_HUD_NO_LAUNCH_TASK = '1';
 process.env.DSH_HUD_NO_STARTMENU = '1';
 process.env.DSH_HUD_NO_AUTO_INSTALL = '1';
+// P-14(A): the update check would hit registry.npmjs.org — never in unit tests.
+process.env.DSH_HUD_NO_PLUGIN_UPDATE = '1';
 process.env.DSH_HUD_AUTOSTART_WITH_DSH = '0';
 
 const HERE = path.dirname(new URL(import.meta.url).pathname.replace(/^\/([A-Za-z]:)/, '$1'));
