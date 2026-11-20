@@ -9,15 +9,22 @@
 - 插件（`plugin/package.json`）独立版本，改协议时双方 `protocolVersion` 必须对齐；
 - 每个版本的条目在发版前写好，正文直接复制进 GitHub Release。
 
+## [0.5.8] - 2026-11-21
+
+### Fixed
+
+- **npm 重发**：0.5.7 发布后 tarball 返回 404（registry 元数据已有该版本但文件缺失），无法安装。
+  本次仅提升插件包版本号后重发，代码与 0.5.7 完全一致；应用侧仍为 0.5.7。
+
 ## [0.5.7] - 2026-11-20
 
 ### Changed
 
 - **安装包瘦身**：Electron 自带 55 个语言包（约 49 MB），只保留 `en-US` / `zh-CN` / `zh-TW`
   三个（Chromium 找不到对应语言包会自动回落 en-US）。
-- 压缩改走 .NET `ZipArchive` 的 `SmallestSize`（比 `Compress-Archive -CompressionLevel Optimal` 更小），
-  并且先从 `win-unpacked` 用 `robocopy /XJ` 拷一份不含 junction 的临时副本再压
-  （直接压会把 `app/resources/artifacts` 这个开发用 junction 展开成上 GB 的无用文件）。
+- 压缩改由 `make-portable.js` 内置的 Node 写入器完成（deflate level 9、UTF-8 文件名、自动跳过 junction、无 zip64）：
+  `Compress-Archive` 在源目录上持续 `PermissionDenied`（asar 被占用），`robocopy /XJ` 的 .NET 方案在 PowerShell 5.1
+  又缺 4 参重载，因此改为自写压缩，产物可复现且不会把 `app/resources/artifacts` 这个开发用 junction 展开成上 GB 的无用文件。
 
 ### Removed
 
