@@ -1,24 +1,117 @@
 # DSH HUD
 
-Windows 常驻悬浮胶囊 + 520×720 紧凑面板（豆包式）。点胶囊或按全局热键即可直接对话——面板内嵌整套 DSH Web UI，不用切回浏览器。
+An always-on desktop capsule for **DeepSeek Harness (DSH)**: a 64 px whale bubble that expands into a
+520×720 panel with the full DSH Web UI embedded — talk to your agent, run commands and keep an eye on
+running tasks without switching back to a browser.
 
-技术栈：Electron（44.7.0，随包分发）+ 一个很薄的 Cordis 插件（发现文件、计划任务拉起、登录自启、桌面/开始菜单快捷方式、IPC 桥、应用内更新源）。
+- App (Electron companion) version: **0.5.7**
+- Plugin package (`dsh-hud-capsule`) version: **0.5.9**
+- Windows 10 1809+ / Windows 11, x64
 
-当前版本：**0.5.7**（[Release](https://github.com/suianest/dsh-hud/releases/latest)）
+## How it works
 
-## 截图
+A thin Cordis plugin runs inside DSH and keeps a single discovery file (authenticated DSH Web URL with a
+one-shot token). The Electron companion reads that file, loads the Web UI with the `persist:dsh-web`
+session partition, and renders it as a frameless desktop capsule. The plugin also refreshes the URL when
+the DSH port changes, starts the companion together with DSH (direct child process since 0.5.5), removes
+the legacy scheduled task, and registers the `/dsh-hud` command.
+
+## Install
+
+Pick **one** route. All three end with "capsule on the desktop + panel connected to DSH".
+
+### C · npm package (recommended)
+
+```bash
+pnpm add dsh-hud-capsule
+# or: dsh plugin add dsh-hud-capsule
+```
+
+Restart DSH after installing. The plugin will detect that the Electron app is missing, download the
+release archive (≈142 MB, multi-mirror + resume) into `%LOCALAPPDATA%\DSH HUD`, and launch it.
+
+The package ships **English and Chinese** locale files; DSH picks the one matching your UI language.
+
+### A · Portable app (offline / fallback)
+
+1. Download `install-dsh-hud.cmd` from the [latest release](https://github.com/suianest/dsh-hud/releases/latest)
+   (or `installer/install-dsh-hud.cmd` from the repo, then *Raw*).
+2. Double-click it. It creates `%LOCALAPPDATA%\DSH HUD`, downloads and unpacks the zip, verifies the
+   SHA-256 and offers to start the app.
+3. When Windows SmartScreen appears: **More info → Run anyway**.
+4. Install the plugin `dsh-hud-capsule` in DSH (Settings → Plugins → Add plugin) and restart DSH.
+
+Manual alternative: download the zip from the release page, unpack it anywhere writable, and run
+`DSH HUD.lnk`. Never double-click `app\DSH HUD.exe` — it requires launch arguments.
+
+### B · Install straight from GitHub
+
+```bash
+dsh plugin add github:suianest/dsh-hud
+```
+
+Requires `git` on `PATH` (the bare form `suianest/dsh-hud` is not a valid specifier). Without git,
+download the repository zip and point the plugin dialog at the unpacked folder instead.
+
+## Usage
+
+| Action | How |
+|---|---|
+| Expand / collapse | click the capsule |
+| Show / hide globally | `Ctrl+Alt+Space` |
+| Command palette | `⌘` button or `Ctrl+K` |
+| Open the DSH desktop window | palette → "Open DSH desktop window" |
+| Move / snap | drag the capsule (edges snap) |
+| Quit | right-click the capsule → Quit |
+
+The panel is frameless and transparent; DSH's own window controls are hidden while embedded, so the
+capsule's title bar is the only chrome.
+
+## Updates
+
+- **App**: right-click the capsule → *Check for updates*, or palette → *Check for updates*. The app
+  downloads a new `app.asar` (≈0.5 MB), swaps it after the current process exits and relaunches itself.
+- **Plugin**: the plugin checks npm every 6 hours; when a newer `dsh-hud-capsule` exists, the `⌘` button
+  gets an amber dot and the palette shows "Plugin update available vX.Y.Z (copy upgrade command)".
+
+## Antivirus / SmartScreen
+
+The executable is **not code-signed yet** (see [docs/roadmap.md](https://github.com/suianest/dsh-hud/blob/main/docs/roadmap.md), item R-1). Some
+security suites (WuKong, 360, Huorong, Defender SmartScreen) may flag its first automatic start:
+
+1. Allow it once, or add the `%LOCALAPPDATA%\DSH HUD` folder to the whitelist.
+2. Since 0.5.5 the plugin no longer registers scheduled tasks — it spawns the app as a child process of
+   DSH, which is the least suspicious launch path available without a signature.
+3. The plugin log (`%TEMP%\dsh-hud-plugin-diag.log`) prints a hint when a launch was blocked.
+
+## Links
+
+- Repository: <https://github.com/suianest/dsh-hud>
+- Releases / portable zip: <https://github.com/suianest/dsh-hud/releases/latest>
+- Install guide (PDF): <https://github.com/suianest/dsh-hud/releases/latest/download/dsh-hud-install-flow.pdf>
+- Issues: <https://github.com/suianest/dsh-hud/issues>
+
+MIT licensed.
+
+---
+
+## 中文文档
+
+中文完整说明（截图、四条安装路线、安全软件拦截、原理、目录结构、开发与已知限制）保留如下。
+
+### 截图
 
 | 面板（520×720） | 命令面板（⌘ / Ctrl+K） |
 |---|---|
-| ![面板](screenshots/panel.png) | ![命令面板](screenshots/palette.png) |
+| ![面板](https://cdn.jsdelivr.net/gh/suianest/dsh-hud@main/screenshots/panel.png) | ![命令面板](https://cdn.jsdelivr.net/gh/suianest/dsh-hud@main/screenshots/palette.png) |
 
 胶囊：悬停时鲸鱼轮廓会亮起一圈荧光描边。
 
-![胶囊](screenshots/capsule.png)
+![胶囊](https://cdn.jsdelivr.net/gh/suianest/dsh-hud@main/screenshots/capsule.png)
 
 > 截图里的深蓝／金边配色来自下面推荐的社区皮肤，**不是 HUD 自带**；不装皮肤时面板会跟随 DSH 默认的浅色／深色主题。
 
-### 推荐搭配：深海女仆工坊（UI 皮肤）
+#### 推荐搭配：深海女仆工坊（UI 皮肤）
 
 | 项 | 值 |
 |---|---|
@@ -31,7 +124,7 @@ Windows 常驻悬浮胶囊 + 520×720 紧凑面板（豆包式）。点胶囊或
 
 ---
 
-## 两种形态
+### 两种形态
 
 | | 形态 A · 便携版 | 形态 B · DSH 插件形态 |
 |---|---|---|
@@ -44,7 +137,7 @@ Windows 常驻悬浮胶囊 + 520×720 紧凑面板（豆包式）。点胶囊或
 
 ---
 
-## 四条安装路线（按推荐顺序）
+### 四条安装路线（按推荐顺序）
 
 | 路线 | 适合谁 | 怎么做 | 需要 git |
 |---|---|---|---|
@@ -58,7 +151,7 @@ Windows 常驻悬浮胶囊 + 520×720 紧凑面板（豆包式）。点胶囊或
 - **B 面向开发者**：B1 要 `git`；B2 不需要 git，但要自己下载解压 zip。
 - 四条路线可以混用：先装便携版再装插件，插件会直接识别已有安装；反过来也行。
 
-## 安全软件拦截（悟空 / 360 / 火绒 / Defender）
+### 安全软件拦截（悟空 / 360 / 火绒 / Defender）
 
 **现象**：插件装好了，但桌面一直不出现胶囊；或第一次出现后，下次开机又没了。日志里可能只有一行 `launched` 而没有后续。
 
@@ -78,7 +171,7 @@ Windows 常驻悬浮胶囊 + 520×720 紧凑面板（豆包式）。点胶囊或
 
 > **未完成：代码签名。** 目前 exe 仍未签名，第一次运行时 SmartScreen / 国产杀软仍可能弹一次。签名方案（Azure Trusted Signing / OV / EV）与构建链改造记录在 [`docs/roadmap.md`](docs/roadmap.md) 的 R-1。
 
-## 形态 A · 便携版（离线 / 兜底，无需 git）
+### 形态 A · 便携版（离线 / 兜底，无需 git）
 
 **一键安装（推荐）**
 
@@ -98,7 +191,7 @@ Windows 常驻悬浮胶囊 + 520×720 紧凑面板（豆包式）。点胶囊或
 
 ---
 
-## 形态 B · DSH 插件形态（装完即用）
+### 形态 B · DSH 插件形态（装完即用）
 
 1. 解压应用包到任意目录（例如 `%LOCALAPPDATA%\DSH HUD`）。**不需要自己建快捷方式**，插件会代建。
 2. 在 DSH 里安装插件（插件管理界面填仓库地址，或命令行）：
@@ -135,7 +228,7 @@ Windows 常驻悬浮胶囊 + 520×720 紧凑面板（豆包式）。点胶囊或
 
 ---
 
-## 原理：发现文件
+### 原理：发现文件
 
 面板靠**发现文件**找到正在运行的 DSH 服务，由插件写入：
 
@@ -157,7 +250,7 @@ Windows 常驻悬浮胶囊 + 520×720 紧凑面板（豆包式）。点胶囊或
 
 ---
 
-## 使用
+### 使用
 
 | 操作 | 效果 |
 | --- | --- |
@@ -175,7 +268,7 @@ Windows 常驻悬浮胶囊 + 520×720 紧凑面板（豆包式）。点胶囊或
 
 ---
 
-## 应用内更新
+### 应用内更新
 
 右键 →「检查更新」（或命令面板里的同名项）：
 
@@ -187,7 +280,7 @@ Windows 常驻悬浮胶囊 + 520×720 紧凑面板（豆包式）。点胶囊或
 
 ---
 
-## 目录结构
+### 目录结构
 
 ```
 dsh-hud/
@@ -221,7 +314,7 @@ dsh-hud/
 
 ---
 
-## 开发
+### 开发
 
 ```bash
 node scripts/setup.mjs            # 检查 Node、下载 Electron 44.7.0、写 config.local.json
@@ -233,7 +326,7 @@ node app/scripts/make-portable.js # 打包到 dist/win-unpacked + zip + 快捷�
 
 ---
 
-## 已知限制
+### 已知限制
 
 - 必须带 `--no-sandbox` 启动（快捷方式 / 启动脚本已内置；直接双击 exe 会崩）。这是当前机器环境的限制，不是设计选择。
 - 双屏、跨 DPI（100% ↔ 150%）缩放尚未真机验证。
@@ -241,6 +334,6 @@ node app/scripts/make-portable.js # 打包到 dist/win-unpacked + zip + 快捷�
 - 插件直接 `spawn` Electron 不可行；启动统一走计划任务（无需管理员、不弹 UAC）。`spawnApp` / `shellLaunch` 两条实验路径默认关闭，留作调试。
 - `manifest.json` 在部分网络下 raw / jsDelivr 不可达，靠四源回退；如果你的网络全挂，可在 `config.local.json` 里用 `DSH_HUD_MANIFEST_URL` 指到自建镜像。
 
-## 许可证
+### 许可证
 
 MIT，见 [LICENSE](LICENSE)。

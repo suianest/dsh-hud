@@ -9,6 +9,13 @@
 - 插件（`plugin/package.json`）独立版本，改协议时双方 `protocolVersion` 必须对齐；
 - 每个版本的条目在发版前写好，正文直接复制进 GitHub Release。
 
+## [0.5.9] - 2026-11-22
+
+### Changed
+
+- **npm 页面中英双语**：`README.md` 改为英文在前、中文在后（npm 首页默认展示英文）；
+  `package.json` 的 `description` 换成英文。代码无改动，应用侧仍为 0.5.7。
+
 ## [0.5.8] - 2026-11-21
 
 ### Fixed

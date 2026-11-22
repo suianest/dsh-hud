@@ -1,7 +1,7 @@
 {
   "name": "dsh-hud-capsule",
-  "version": "0.5.8",
-  "description": "Windows 常驻悬浮胶囊 + 面板，把 DeepSeek Harness 贴在桌面上（DSH 插件 + Electron 伴生应用）",
+  "version": "0.5.9",
+  "description": "Always-on desktop capsule + compact 520x720 panel for DeepSeek Harness (DSH plugin + Electron companion)",
   "type": "module",
   "main": "./plugin/index.js",
   "exports": {
