@@ -42,11 +42,11 @@
  *     { "type": "reload" | "show" | "hide" | "toggle", "seq": N }
  */
 import { mkdir, writeFile, rename, rm, readdir, readFile, stat } from 'node:fs/promises';
-import { appendFileSync, createReadStream, createWriteStream, existsSync, readFileSync, renameSync, statSync } from 'node:fs';
+import { appendFileSync, createReadStream, createWriteStream, existsSync, mkdirSync, readFileSync, renameSync, statSync, unlinkSync } from 'node:fs';
 import { createHash } from 'node:crypto';
 import { Readable } from 'node:stream';
 import { pipeline } from 'node:stream/promises';
-import { spawn } from 'node:child_process';
+import { spawn, spawnSync } from 'node:child_process';
 import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -391,6 +391,29 @@ function ageMsOf(updatedAt) {
   return Number.isNaN(t) ? Infinity : Date.now() - t;
 }
 
+
+/**
+ * Decide what the host should do with one IPC request file.
+ *
+ * Extracted from the poll loop so the two-different-ids ping-pong can be tested
+ * without a live host: a request is only skipped when its own id was already
+ * handled (or when it never had an id), and `at` is accepted as an epoch number
+ * or an ISO string — the previous version compared only numbers, so a string
+ * timestamp skipped the TTL check and replayed its action on every tick.
+ *
+ * @param {{id?: string, at?: number|string}|null|undefined} req
+ * @param {Set<string>} handledIds ids already processed since apply()
+ * @param {number} [now] current epoch ms
+ * @param {number} [ttlMs] how old a request may be and still run
+ * @returns {'skip'|'expired'|'handle'}
+ */
+export function requestVerdict(req, handledIds, now = Date.now(), ttlMs = 120_000) {
+  if (!req || typeof req !== 'object' || !req.id) return 'skip';
+  if (handledIds && handledIds.has(req.id)) return 'skip';
+  const stamp = typeof req.at === 'number' ? req.at : Date.parse(String(req.at ?? ''));
+  if (Number.isFinite(stamp) && now - stamp > ttlMs) return 'expired';
+  return 'handle';
+}
 export function apply(ctx, config = {}) {
   const webApp = ctx.get('webApp');
   const connection = ctx.get('connection');
@@ -573,7 +596,21 @@ export function apply(ctx, config = {}) {
     const tmp = discoveryTmpName();
     await writeFile(
       tmp,
-      JSON.stringify({ pid: d.pid, port: d.port, url: d.url, updatedAt: d.updatedAt, protocolVersion: PROTOCOL_VERSION }, null, 2),
+      JSON.stringify(
+        {
+          pid: d.pid,
+          port: d.port,
+          url: d.url,
+          updatedAt: d.updatedAt,
+          protocolVersion: PROTOCOL_VERSION,
+          // Medium IL knows where the desktop app lives; the HUD runs at Low
+          // IL and its own probe (Get-Process | .Path) is blocked there
+          // (2026-11-23 "打开 DSH 桌面窗口" bug).
+          dshExe: process.execPath,
+        },
+        null,
+        2,
+      ),
       'utf8',
     );
     await renameWithRetry(tmp, dFile);
@@ -1158,27 +1195,46 @@ export function apply(ctx, config = {}) {
   // Medium, so the HUD posts a request file and the launch + focus happen here.
   const IPC_POLL_MS = 500;
   const DSH_DESKTOP_EXE = desktopExe;
-  let lastRequestId = '';
+  // 多个 IPC 目录里可能各有一个 request.json：只用单一 lastRequestId 去重时，
+  // 两个文件的 id 会互相覆盖，导致「过期日志 + 重放 autostart」每 500ms 循环一次。
+  // 改为按 id 集合去重（有上限），并在处理/丢弃后删除 request.json。
+  const handledRequestIds = new Set();
+  const markHandled = (id) => {
+    if (!id) return;
+    handledRequestIds.add(id);
+    if (handledRequestIds.size > 64) {
+      const first = handledRequestIds.values().next().value;
+      if (first) handledRequestIds.delete(first);
+    }
+  };
   let ipcBusy = false;
   // Two writers exist: a dev checkout (Low IL, can only write inside the repo)
   // and a packaged build (profile may live elsewhere). Poll every candidate so
   // either layout reaches the bridge; DSH_HUD_IPC_DIR still wins outright.
   const ipcDirectories = () => {
     if (process.env.DSH_HUD_IPC_DIR) return [process.env.DSH_HUD_IPC_DIR];
-    const dirs = [path.join(path.dirname(cfg.appDir), 'artifacts', 'ipc')];
+    // Canonical folder first: the app writes here in both dev and packaged
+    // runs (2026-11-23 desktop-focus bug), the legacy paths stay for older
+    // builds that still drop their request next to the install root.
+    const dirs = [];
+    if (process.env.LOCALAPPDATA) {
+      dirs.push(path.join(process.env.LOCALAPPDATA, 'dsh-hud', 'ipc'));
+    }
+    dirs.push(path.join(path.dirname(cfg.appDir), 'artifacts', 'ipc'));
     // Packaged installs write next to their own resources directory
     // (<root>/artifacts/ipc, or <root>/resources/artifacts/ipc when the asar is
     // under resources/). Without this the desktop-focus request silently times
     // out on any machine that is not the build machine (t40 P-02).
     if (hud.found) {
+      // Compatibility: builds up to 0.5.7 derived their ipc dir from the asar
+      // location (<root>/app/resources/app.asar → <root>/app/artifacts/ipc).
+      // Users can update the plugin before the app, so keep polling that path.
+      if (hud.dir) dirs.push(path.join(hud.dir, 'artifacts', 'ipc'));
       const root = hud.root ?? (hud.dir && path.basename(hud.dir) === 'app' ? path.dirname(hud.dir) : hud.dir);
       if (root) {
         dirs.push(path.join(root, 'artifacts', 'ipc'));
         dirs.push(path.join(root, 'resources', 'artifacts', 'ipc'));
       }
-    }
-    if (process.env.LOCALAPPDATA) {
-      dirs.push(path.join(process.env.LOCALAPPDATA, 'dsh-hud', 'ipc'));
     }
     return dirs;
   };
@@ -1573,6 +1629,27 @@ const PROTOCOL_VERSION = 1;
     return { ok: code === 0, out: out || 'exit ' + code };
   }
 
+  // The HUD runs at Low IL; a folder created here (Medium IL) carries a Medium
+  // mandatory label, so the HUD's mkdir/write inside it fails with EPERM
+  // (2026-11-23 "打开 DSH 桌面窗口" bug). Create the canonical folder ourselves
+  // and drop its integrity label to Low so both sides can use it.
+  const ensureIpcDirectory = () => {
+    const la = process.env.LOCALAPPDATA;
+    if (process.platform !== 'win32' || !la) return;
+    const dir = path.join(la, 'dsh-hud', 'ipc');
+    try {
+      mkdirSync(dir, { recursive: true });
+      const r = spawnSync('icacls', [dir, '/setintegritylevel', '(OI)(CI)Low'], {
+        encoding: 'utf8',
+        windowsHide: true,
+      });
+      log('ipc dir ready:', dir, 'icacls=' + (r.status ?? 'n/a'));
+    } catch (err) {
+      log('ipc dir setup failed:', err?.message ?? err);
+    }
+  };
+  ensureIpcDirectory();
+
   const ipcTimer = setInterval(() => {
     if (disposed || ipcBusy) return;
     for (const dir of ipcDirectories()) {
@@ -1580,13 +1657,15 @@ const PROTOCOL_VERSION = 1;
       try { raw = readFileSync(path.join(dir, 'request.json'), 'utf8'); } catch { continue; }
       let req;
       try { req = JSON.parse(raw); } catch { continue; }
-      if (!req || !req.id || req.id === lastRequestId) continue;
-      if (typeof req.at === 'number' && Date.now() - req.at > IPC_REQUEST_TTL_MS) {
-        lastRequestId = req.id;
-        log('ipc request expired, ignored:', req.action, req.id);
+      const verdict = requestVerdict(req, handledRequestIds, Date.now(), IPC_REQUEST_TTL_MS);
+      if (verdict === 'skip') continue;
+      if (verdict === 'expired') {
+        markHandled(req.id);
+        log('ipc request expired, dropped:', req.action, req.id);
+        try { unlinkSync(path.join(dir, 'request.json')); } catch { /* best effort */ }
         continue;
       }
-      lastRequestId = req.id;
+      markHandled(req.id);
       ipcBusy = true;
       const task = req.action === 'autostart'
         ? applyAutostart(Boolean(req.enabled)).then((file) => ({ ok: true, out: 'autostart ' + (req.enabled ? 'on' : 'off') + ' ' + file }))
@@ -1598,6 +1677,7 @@ const PROTOCOL_VERSION = 1;
           await mkdir(dir, { recursive: true });
           await writeFile(tmp, JSON.stringify({ id: req.id, ok: res.ok, out: res.out, at: Date.now() }, null, 2));
           await rename(tmp, file);
+          try { unlinkSync(path.join(dir, 'request.json')); } catch { /* best effort */ }
         })
         .catch((err) => log('ipc handle failed:', err?.message ?? err))
         .finally(() => { ipcBusy = false; });

@@ -117,6 +117,10 @@ if (!gotLock) {
   console.error('[hud] another instance is already running (single-instance lock) - exiting');
   app.quit();
 } else {
+  // Windows toasts (the desktop-focus feedback) only show when the process has
+  // an AppUserModelID; without it Notification.isSupported() is false.
+  app.setAppUserModelId('com.suianest.dsh-hud');
+
   let hud = null;
   let control = null;
 

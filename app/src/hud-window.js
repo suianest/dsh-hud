@@ -700,7 +700,21 @@ class HudWindow {
   // 会先给已经在前台的窗口一次 minimize→restore 的「弹一下」，否则用户看不
   // 出任何变化。激活期间临时让出置顶，避免胶囊/面板挡住刚调上来的窗口。
   _openDshDesktop() {
-    const exe = this.config.dshExe;
+    let exe = this.config.dshExe;
+    if (!exe) {
+      // Low IL cannot read the desktop process path; the plugin (Medium) puts it
+      // in discovery.json, so use that instead of failing silently.
+      try {
+        const d = require('./discovery').readDiscovery();
+        if (d && typeof d.dshExe === 'string' && fs.existsSync(d.dshExe)) {
+          exe = d.dshExe;
+          this.config.dshExe = exe;
+          this._log('desktop exe from discovery: ' + exe);
+        }
+      } catch (err) {
+        this._log('discovery exe lookup failed: ' + (err && err.message));
+      }
+    }
 
     // Fold the panel down first: the panel renders the same DSH conversation
     // over most of the screen, so a desktop window opening *behind* it looks
@@ -729,6 +743,14 @@ class HudWindow {
         return;
       }
       this._log('host bridge unavailable, falling back to local launch');
+      // Spawning a second DSH from this Low-IL process is what made the click
+      // look "silent": the copy cannot hand off to the Medium-IL primary and
+      // exits without ever showing a window (report 2026-11-23).
+      if (this._isDesktopRunning()) {
+        this._log('desktop already running; skipped spawning another instance');
+        this._notify('DSH 桌面已在运行，但 HUD 无权把它提到前台。请启用 dsh-hud-capsule 插件桥接，或直接点任务栏里的 DSH。');
+        return;
+      }
       this._launchDshDesktop(exe);
       setTimeout(() => this._focusDshDesktop({ quiet: true }), 900);
     });
@@ -754,7 +776,7 @@ class HudWindow {
       }
       const started = Date.now();
       const poll = () => {
-        if (Date.now() - started > 6000) {
+        if (Date.now() - started > 12000) {
           this._log('host request timeout');
           resolve(null);
           return;
@@ -834,6 +856,48 @@ class HudWindow {
       this._log('desktop notification: ' + body);
     } catch (err) {
       this._log('desktop notification failed: ' + (err && err.message));
+    }
+  }
+
+  // One tasklist probe, cached briefly so repeated clicks do not spawn a
+  // process each time. Only used to avoid starting a doomed second instance.
+  _isDesktopRunning() {
+    const now = Date.now();
+    if (this._desktopProbe && now - this._desktopProbe.at < 2000) {
+      return this._desktopProbe.running;
+    }
+    let running = false;
+    let probeFailed = false;
+    try {
+      const out = execFileSync(
+        'tasklist',
+        ['/FI', 'IMAGENAME eq DeepSeek Harness.exe', '/NH'],
+        { encoding: 'utf8', timeout: 4000, windowsHide: true }
+      );
+      running = /DeepSeek Harness\.exe/i.test(out || '');
+    } catch (err) {
+      probeFailed = true;
+      this._log('desktop probe failed: ' + (err && err.message));
+    }
+    // A failed probe is not proof that nothing is running; assuming so launched
+    // a doomed second instance (the silent-failure report).
+    if (probeFailed) running = true;
+    this._desktopProbe = { at: now, running };
+    return running;
+  }
+
+  // Tray-style notification for feedback that must not depend on the panel.
+  _notify(body) {
+    try {
+      const { Notification } = require('electron');
+      if (!Notification || typeof Notification.isSupported !== 'function' || !Notification.isSupported()) {
+        this._log('notification unsupported: ' + body);
+        return;
+      }
+      new Notification({ title: 'DSH HUD', body, silent: true }).show();
+      this._log('notification: ' + body);
+    } catch (err) {
+      this._log('notification failed: ' + (err && err.message));
     }
   }
 

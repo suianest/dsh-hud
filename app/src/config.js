@@ -65,7 +65,10 @@ function defaults(repoRoot, env) {
     dshExe: '', // detection result; '' = not found
     dshWindowTitle: 'DeepSeek Harness',
     discoveryPath: la ? path.join(la, 'dsh-hud', 'discovery.json') : '',
-    ipcDir: path.join(installRoot, 'artifacts', 'ipc'),
+    // Canonical IPC folder: per-user, identical in dev and packaged runs, and
+    // already polled by the plugin (t41 P-02 / 2026-11-23 desktop-focus bug).
+    // Fall back to the install root only when LOCALAPPDATA is unavailable.
+    ipcDir: la ? path.join(la, 'dsh-hud', 'ipc') : path.join(installRoot, 'artifacts', 'ipc'),
     userDataDir: la ? path.join(la, 'dsh-hud', 'userdata') : '',
     diagFile: path.join(os.tmpdir(), 'dsh-hud-plugin-diag.log'),
     nodePath: process.execPath || '',

@@ -4,8 +4,8 @@ An always-on desktop capsule for **DeepSeek Harness (DSH)**: a 64 px whale bubbl
 520×720 panel with the full DSH Web UI embedded — talk to your agent, run commands and keep an eye on
 running tasks without switching back to a browser.
 
-- App (Electron companion) version: **0.5.7**
-- Plugin package (`dsh-hud-capsule`) version: **0.5.9**
+- App (Electron companion) version: **0.5.8**
+- Plugin package (`dsh-hud-capsule`) version: **0.5.10**
 - Windows 10 1809+ / Windows 11, x64
 
 ## How it works
@@ -141,7 +141,7 @@ MIT licensed.
 
 | 路线 | 适合谁 | 怎么做 | 需要 git |
 |---|---|---|---|
-| **C · npm 包名**（首选） | 绝大多数人 | DSH → 设置 → 插件 → 添加 → 填 `dsh-hud-capsule`（[npm 0.5.3](https://www.npmjs.com/package/dsh-hud-capsule)），应用包随后自动下载 | 否 |
+| **C · npm 包名**（首选） | 绝大多数人 | DSH → 设置 → 插件 → 添加 → 填 `dsh-hud-capsule`（[npm 0.5.10](https://www.npmjs.com/package/dsh-hud-capsule)），应用包随后自动下载 | 否 |
 | **A · 便携版 / 安装器** | 自动安装失败、离线、想看见全过程 | 下载 `install-dsh-hud.cmd` 双击，或解压 zip 后双击 `DSH HUD.lnk` | 否 |
 | **B1 · GitHub 仓库** | 开发者 | 填 `github:suianest/dsh-hud` | **是**（pnpm 内部 `git clone`） |
 | **B2 · 本地目录** | 开发者 / 没装 git 也想用仓库版 | 下载仓库 zip 解压，填解压后的绝对路径（如 `D:\DSH\dsh-hud`） | 否 |

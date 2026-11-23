@@ -9,6 +9,25 @@
 - 插件（`plugin/package.json`）独立版本，改协议时双方 `protocolVersion` 必须对齐；
 - 每个版本的条目在发版前写好，正文直接复制进 GitHub Release。
 
+## [0.5.10] - 2026-11-23
+
+### Fixed
+
+- **命令面板「打开 DSH 桌面窗口」不再静默失败**：HUD 与插件原先各写各的 IPC 目录（`<app>/artifacts/ipc` vs 仓库 `artifacts/ipc`），
+  桥接永远超时后回退到直接 `spawn`，DSH 已在运行时只会起一个无窗口的第二实例。现在两端统一使用 `%LOCALAPPDATA%\dsh-hud\ipc`，
+  插件启动时用 `icacls /setintegritylevel Low` 放开低完整性写入；HUD 侧超时 6 s → 12 s，并在「DSH 已在运行但无法置前」时给出可见通知而不是静默退出。
+- **IPC 轮询死循环**：多个目录里的 `request.json` 共用一个 `lastRequestId` 去重，两个不同 id 会每 500 ms 互相覆盖，
+  导致「过期日志 + 重放 autostart」无限循环（表现为反复弹窗、反复重写开机启动项）。改为按 id 集合去重，处理或丢弃后删除 `request.json`，
+  并兼容字符串形式的 `at`。
+- **通知不显示**：`app.setAppUserModelId("com.suianest.dsh-hud")`，否则 Windows 上 `Notification.isSupported()` 为 false。
+- **兼容旧版应用**：0.5.7 及更早的 HUD 会把请求写到 `<root>/app/artifacts/ipc`，插件现在同时轮询该路径，
+  所以「先升级插件、后升级应用」的中间状态也能聚焦窗口，不会退回静默 spawn。
+
+### Tests
+
+- 新增 `tests/e2e/unit/plugin-ipc.test.mjs`（8 条）：覆盖 id 去重、数字/ISO 时间戳过期、TTL 边界，
+  以及「两个目录不同 id 不再互踢」的循环回归；全量 **96/96**。
+- `artifacts/harness-ipc.mjs` 真机 harness 两个场景（stale / legacy）均通过。
 ## [0.5.9] - 2026-11-22
 
 ### Changed

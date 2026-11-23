@@ -231,6 +231,9 @@ function createMockElectron(overrides = {}) {
     state.loginItem = !!opts.openAtLogin;
     state.lastLoginItem = opts;
   };
+  app.setAppUserModelId = (id) => {
+    state.aumid = id;
+  };
   app.requestSingleInstanceLock = () => (overrides.singleInstance === false ? false : true);
   app.quit = () => {
     state.quitCalls += 1;
