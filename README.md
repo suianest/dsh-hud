@@ -4,7 +4,7 @@ An always-on desktop capsule for **DeepSeek Harness (DSH)**: a 64 px whale bubbl
 520×720 panel with the full DSH Web UI embedded — talk to your agent, run commands and keep an eye on
 running tasks without switching back to a browser.
 
-- App (Electron companion) version: **0.5.8**
+- App (Electron companion) version: **0.5.9**
 - Plugin package (`dsh-hud-capsule`) version: **0.5.10**
 - Windows 10 1809+ / Windows 11, x64
 

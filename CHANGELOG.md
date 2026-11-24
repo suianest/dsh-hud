@@ -9,6 +9,25 @@
 - 插件（`plugin/package.json`）独立版本，改协议时双方 `protocolVersion` 必须对齐；
 - 每个版本的条目在发版前写好，正文直接复制进 GitHub Release。
 
+## [App 0.5.9] - 2026-11-24
+
+> 应用侧版本（Electron）。插件版本仍是 **0.5.10**，本次没有插件改动。
+
+### Fixed
+
+- **HUD 面板空白/假死可诊断了**：`app/src/web-embed.js` 的加载链路原先全走 `console.*`，打包版看不到任何视图日志。
+  现在 `web load` / `web loaded` / `web load failed` / `web http status` 全部写进 `udd/hud.log`，视图事件通过
+  `this.web.log = (msg) => this._log(msg)` 接进同一份日志。
+- **渲染进程崩溃后不再永久空白**：新增 `render-process-gone`（400 ms 后自动 `reload`）与 `unresponsive` / `responsive` 监听。
+- **并发导航冲突**：`load()` 在已有导航在途时先 `webContents.stop()` 再发起新导航（取消-重载），
+  避免 `startDsh` / 5 s 恢复循环 / `hud:web-retry` 同时 `loadURL` 把视图留在空白页。
+- **自启请求走错 IPC 目录**：`app/src/autostart.js` 的 `requestHostApply()` 仍写 `REPO_ROOT/artifacts/ipc` 且 `at` 用 ISO 字符串，
+  现已改用 `loadConfig().ipcDir`（`%LOCALAPPDATA%\dsh-hud\ipc`）与数字时间戳，与 0.5.8 起的桥接规范一致。
+
+### Tests
+
+- 全量 **96/96** 通过（含 `web-embed` 视图日志、取消-重载语义回归）。
+
 ## [0.5.10] - 2026-11-23
 
 ### Fixed

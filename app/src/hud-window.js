@@ -151,6 +151,7 @@ class HudWindow {
     this.win = win;
     this.web = new WebEmbed(win);
     this.web.create(); // create the view + wire its load/error events (no attach yet)
+    this.web.log = (msg) => this._log(msg); // surface web lifecycle in hud.log
     this.web.onEscape = () => this.collapse(); // Esc inside the embedded UI collapses
     this.web.onTheme = (theme) => this._pushTheme(theme); // page theme -> shell colors (t34)
     this.web.onCommand = () => this._togglePalette(); // Ctrl+K inside the embedded UI (t35)
