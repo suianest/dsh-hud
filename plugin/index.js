@@ -467,6 +467,7 @@ export function apply(ctx, config = {}) {
   const abort = new AbortController();
   let child = null; // SubprocessHandle | null
   let lastOrigin = null;
+  let lastDiscoveryUrl = null;
   let controlSeq = 0;
   let respawnCount = 0;
   let respawnTimer = null;
@@ -741,11 +742,31 @@ export function apply(ctx, config = {}) {
     return payload;
   };
 
+  // A HUD that was already running when DSH (re)started still points at the
+  // old origin/token. Ask it to reload so the panel reconnects immediately
+  // instead of waiting for its own 5s recovery poll.
+  const nudgeReload = (delayMs, label) => {
+    const timer = setTimeout(() => {
+      try {
+        sendControl('reload');
+        log('reload nudge sent to HUD (' + label + ')');
+      } catch (err) {
+        log('reload nudge failed:', err?.message ?? err);
+      }
+    }, delayMs);
+    if (typeof timer.unref === 'function') timer.unref();
+    return timer;
+  };
+
   const notifyReloadIfChanged = (d) => {
     if (d.origin && lastOrigin && d.origin !== lastOrigin) {
       sendControl('reload');
     }
+    if (lastDiscoveryUrl && d.url && d.url !== lastDiscoveryUrl) {
+      nudgeReload(600, 'discovery url changed');
+    }
     lastOrigin = d.origin;
+    lastDiscoveryUrl = d.url;
   };
 
   // --- child process management (t7) --------------------------------------
@@ -1178,6 +1199,11 @@ export function apply(ctx, config = {}) {
           log('auto-start with DSH skipped (user turned autostart off)');
         } else if ((await hudProcessCount()) > 0) {
           log('capsule already running; skip auto-start');
+          // The HUD outlived a DSH restart: it still holds the previous
+          // origin/token, so ask it to reconnect instead of waiting for its
+          // own recovery poll.
+          sendControl('reload');
+          nudgeReload(2500, 'HUD was already running');
         } else {
           const started = await ensureHudRunning();
           log(started ? 'auto-started with DSH' : 'auto-start with DSH failed (see log above)');
@@ -1523,6 +1549,7 @@ const PROTOCOL_VERSION = 1;
       await sleep(600);
       if ((await hudProcessCount()) > 0) {
         log('direct launch confirmed: DSH HUD is running');
+        nudgeReload(4000, 'direct launch');
         return true;
       }
     }
@@ -1576,7 +1603,10 @@ const PROTOCOL_VERSION = 1;
     if (code !== 0) return false;
     for (let i = 0; i < 10; i += 1) {
       await sleep(600);
-      if ((await hudProcessCount()) > 0) return true;
+      if ((await hudProcessCount()) > 0) {
+        nudgeReload(4000, 'scheduled task launch');
+        return true;
+      }
     }
     log('launch task ran but no DSH HUD process appeared');
     log(LAUNCH_BLOCKED_HINT);

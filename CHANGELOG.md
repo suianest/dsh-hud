@@ -9,6 +9,21 @@
 - 插件（`plugin/package.json`）独立版本，改协议时双方 `protocolVersion` 必须对齐；
 - 每个版本的条目在发版前写好，正文直接复制进 GitHub Release。
 
+## [0.5.11] - 2026-11-24
+
+### Fixed
+
+- **HUD 比 DSH 活得久时不会自己重连**：DSH 重启后插件重新 apply，若胶囊进程仍在（`capsule already running`），
+  它手里还是上一次的 origin/token，只能等自己 5 s 轮询。现在这一支会立刻 `sendControl('reload')`，
+  并在 2.5 s 后再补一次，面板基本无感恢复。
+- **我们拉起 HUD 之后补一次 reload**：`startHudDirect()` / 计划任务兜底确认进程起来后，4 s 再发一次 reload，
+  避免视图在 token/端口还没稳定时先加载成 401/空白。
+- **discovery 的 url 变化也会触发重载**（同端口换 token 的场景），有 600 ms 延迟合并抖动。
+
+### Tests
+
+- 全量 **96/96**（新增逻辑只走打包态 auto-start 分支，单测环境用 `DSH_HUD_AUTOSTART_WITH_DSH=0` 避开）。
+
 ## [App 0.5.9] - 2026-11-24
 
 > 应用侧版本（Electron）。插件版本仍是 **0.5.10**，本次没有插件改动。

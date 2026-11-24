@@ -1,6 +1,6 @@
 {
   "name": "dsh-hud-capsule",
-  "version": "0.5.10",
+  "version": "0.5.11",
   "description": "Always-on desktop capsule + compact 520x720 panel for DeepSeek Harness (DSH plugin + Electron companion)",
   "type": "module",
   "main": "./plugin/index.js",
