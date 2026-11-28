@@ -305,3 +305,38 @@
 - 发现文件（`%LOCALAPPDATA%\dsh-hud\discovery.json`）+ token→cookie 鉴权；
   自绘错误页，带「重试 / 启动 DSH」两个按钮与自动重连。
 - 开机自启（`app.setLoginItemSettings`）与右键退出；首次运行不主动触碰登录项。
+
+## [App 0.5.12] - 2026-11-28
+
+### Fixed
+
+- **P-15-2 让路**：插件的 `reload` 提示不再打断正在进行的导航。视图处于
+  `401 → 错误页 → token 重试` 序列时，旧实现会 `stop()` 掉在途导航
+  （日志 `web load: cancelled the in-flight navigation`），面板空 8–15 秒；
+  现在改为等导航结束（最多约 3 秒）再刷新，空闲时立即刷新。
+  `control.json {action:"reload"}` 走新的 `reloadWebDeferred()`。
+
+### Tests
+
+- `hud-window.test.cjs`: nudge reload 在导航进行中不发起第二次 load、不调用 `stop()`，
+  导航结束后恰好刷新一次。
+- 全量 98/98。
+
+## [0.5.12] - 2026-11-28
+
+### Fixed
+
+- **P-15-1 apply 幂等**：同一 DSH 进程内重复挂载插件时，第二次 `apply()`
+  直接跳过（日志 `apply skipped (duplicate)`），不再重复写自启、拉 HUD、
+  建快捷方式；dispose 时从集合移除，正常 reload 不受影响。
+- **P-15-2 discovery.port 类型**：`discovery.json` 的 `port` 由字符串改为数字
+  （契约文档见 `docs/discovery-contract.md`）。
+
+### Added
+
+- `docs/discovery-contract.md`：discovery / control / ipc 三类文件的字段与兼容规则。
+
+### Tests
+
+- `plugin.test.mjs`: `apply skipped (duplicate)` 用例、`port` 类型断言。
+- `plugin-ipc.test.mjs`: 双目录互踢回归（8 条）。

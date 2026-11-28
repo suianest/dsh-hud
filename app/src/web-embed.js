@@ -414,6 +414,13 @@ class WebEmbed {
     this._loading = false;
   }
 
+  // P-15-2: callers that only want to refresh (the plugin 'reload' nudge)
+  // need to know whether a navigation is already in flight; reloading on top
+  // of it aborts the load and costs several seconds of blank panel.
+  isLoading() {
+    return this._loading;
+  }
+
   load({ forceToken = false } = {}) {
     if (!this.view) this.create();
     if (this._loading) {

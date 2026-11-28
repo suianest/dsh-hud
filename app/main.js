@@ -174,7 +174,7 @@ if (!gotLock) {
         toggle: () => { if (hud) hud.toggle(); },
         show: () => { if (hud) hud.showPanel(); },
         hide: () => { if (hud) hud.showCapsule(); },
-        reload: () => { if (hud) hud.reloadWeb(); },
+        reload: () => { if (hud) hud.reloadWebDeferred('plugin nudge'); },
         // /dsh-hud off → graceful exit (plugin waits for the process to go away).
         quit: () => { app.quit(); },
         // P-14(A): the plugin noticed a newer npm release; surface it in the HUD.

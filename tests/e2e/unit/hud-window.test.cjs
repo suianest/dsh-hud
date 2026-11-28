@@ -885,3 +885,24 @@ test('an older or equal "latest" is ignored, and previously shown updates are cl
   const items = (openMsg && openMsg.payload && openMsg.payload.items) || [];
   assert.equal(items.some((it) => it.id === 'plugin-update'), false, 'downgrades never get an entry');
 });
+
+test('P-15-2: a nudge reload waits for the in-flight navigation instead of aborting it', async () => {
+  const ctx = setup({ discovery: freshDiscovery() });
+  const { hud } = boot(ctx);
+  hud.showPanel();
+  const wc = hud.web.view.webContents;
+  const before = wc.loaded.length;
+  const cancelsBefore = wc.stopped ? wc.stopped.length : 0;
+
+  // A 401 -> error page -> token retry sequence is in flight.
+  hud.web._loading = true;
+  hud.reloadWebDeferred('plugin nudge');
+  assert.equal(wc.loaded.length, before, 'must not start a second navigation while one is in flight');
+  if (wc.stopped) assert.equal(wc.stopped.length, cancelsBefore, 'must not abort the in-flight navigation');
+
+  // The in-flight navigation settles; the deferred reload fires on the next tick.
+  hud.web._loading = false;
+  await new Promise((resolve) => setTimeout(resolve, 500));
+  assert.equal(wc.loaded.length, before + 1, 'reload fires once the view is idle');
+  assert.match(wc.loaded.at(-1).url, /\?token=test-token/);
+});

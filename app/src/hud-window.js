@@ -89,6 +89,7 @@ class HudWindow {
     this._revealPending = false; // capsule<->panel switch is waiting for a paint
     this._revealTimer = null; // fallback timer for the paint handshake
     this.web = null; // WebEmbed (embedded DSH Web UI, t6)
+    this._deferredReloadTimer = null; // P-15-2: pending nudge reload
     this._webBounds = null; // last #web-host rect from the shell renderer
     this._rightbarOpen = false; // DSH page's right column is expanded
     this._rightbarCooldownUntil = 0; // ignore self-induced reports right after a resize
@@ -404,6 +405,35 @@ class HudWindow {
   // 401 webRequest 兜底，停在自绘错误页（D3）。
   reloadWeb() {
     if (this.web) this.web.reload({ forceToken: true });
+  }
+
+  // P-15-2: the plugin nudges 'reload' after a DSH restart. If the view is in
+  // the middle of a 401 -> error page -> token retry sequence, reloading now
+  // aborts that navigation (ERR_ABORTED) and the panel stays blank ~8-15 s.
+  // Wait for the in-flight navigation to settle (max ~3 s), then reload.
+  reloadWebDeferred(reason = 'reload') {
+    if (!this.web) return;
+    if (this._deferredReloadTimer) {
+      clearTimeout(this._deferredReloadTimer);
+      this._deferredReloadTimer = null;
+    }
+    const attempt = (tries) => {
+      this._deferredReloadTimer = null;
+      if (!this.web) return;
+      if (this.web.isLoading && this.web.isLoading()) {
+        if (tries >= 12) {
+          this._log(`deferred reload gave up waiting (${reason}); forcing reload`);
+          this.web.reload({ forceToken: true });
+          return;
+        }
+        if (tries === 0) this._log(`deferred reload: navigation in flight (${reason})`);
+        this._deferredReloadTimer = setTimeout(() => attempt(tries + 1), 250);
+        return;
+      }
+      this._log(`deferred reload: view idle, reloading (${reason})`);
+      this.web.reload({ forceToken: true });
+    };
+    attempt(0);
   }
 
   // Persist the current position then exit. The context-menu 关闭项 and the
@@ -1586,6 +1616,11 @@ class HudWindow {
     if (this.web) {
       this.web.destroy();
       this.web = null;
+    }
+
+    if (this._deferredReloadTimer) {
+      clearTimeout(this._deferredReloadTimer);
+      this._deferredReloadTimer = null;
     }
 
     if (this._revealTimer) {

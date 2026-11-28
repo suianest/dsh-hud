@@ -1,6 +1,6 @@
 {
   "name": "dsh-hud",
-  "version": "0.5.9",
+  "version": "0.5.12",
   "private": true,
   "description": "DSH HUD — Windows 常驻悬浮胶囊 + 520px 紧凑面板（内嵌 DSH Web UI）",
   "author": "dsh-hud",
