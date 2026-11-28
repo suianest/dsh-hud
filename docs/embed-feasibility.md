@@ -2,7 +2,7 @@
 
 > 评估对象：本机正在运行的 DSH Web UI（`http://127.0.0.1:50265`，token 由 t2 桥插件写入 `%LOCALAPPDATA%\dsh-hud\discovery.json`）。
 > 方法：node fetch 拉取真实 `index.html` / `assets/*.js` / `assets/*.css` / 三个 plugin combo bundle，静态阅读布局与聊天模块源码；布局列宽用 bundle 内的**原函数**在 Node 里复算。
-> 状态：静态分析已完成；**像素级验证（`artifacts/gate-embed.png`）尚未产生**，见 §12 占位。
+> 状态：静态分析已完成。像素级验证后来在 0.3.x 通过真机 `capturePage` 完成（`artifacts/hud-capture.web.png`、`docs/acceptance.md` §10.3）；本文 §12 的「待验证」是当时的记录，保留存档。
 
 ---
 
@@ -367,7 +367,7 @@ html, body { background: transparent !important; }
 
 ---
 
-## 12. 待验证（等待用户侧截图证据）
+## 12. 待验证（历史记录 · 2026-11-05；后续已真机验证）
 
 `scripts/gate-embed.cmd` 由 captain 提供（入口 `gate\main.js`，520×720 无边框窗口 + `capturePage()` + 布局指标采集），产物应为 `artifacts/gate-embed.json` + `artifacts/gate-embed.png`。**截至本文定稿（2026-11-05 01:27）json/png 均未产生**：01:16 那次只留下 2 B 空日志；01:22 / 01:26 我在会话内复跑两次，分别拿到 MODULE_NOT_FOUND 与 `0xC0000005` 秒崩（见下）。因此 §10 的 8 条验收清单全部为「待验证」。
 

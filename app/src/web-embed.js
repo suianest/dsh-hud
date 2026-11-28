@@ -23,7 +23,7 @@ const path = require('path');
 const fs = require('fs');
 
 const { WEB_PARTITION } = require('./constants');
-const { readDiscovery, tokenUrl, cleanUrl, ageMs } = require('./discovery');
+const { readDiscovery, tokenUrl, cleanUrl, ageMs, protocolVersion, PROTOCOL_VERSION } = require('./discovery');
 const { getCompactCss } = require('./compact-css');
 
 const WEB_PRELOAD = path.join(__dirname, '..', 'renderer', 'web-preload.js');
@@ -31,6 +31,13 @@ const ERROR_PAGE = path.join(__dirname, '..', 'renderer', 'error.html');
 
 class WebEmbed {
   constructor(win) {
+    // Diagnostics: packaged builds have no visible console, so WebEmbed now
+    // reports lifecycle events through a logger the window writes to hud.log.
+    this.log = (msg) => console.log(msg);
+    // Only one loadURL may be in flight: startDsh()/recovery/retry used to
+    // race each other and leave the WebContentsView blank (user 2026-11-24).
+    this._loading = false;
+    this._pendingLoad = null;
     this.win = win;
     this.view = null;
     this.bounds = null;        // last reported {x,y,width,height} from the shell
@@ -187,6 +194,9 @@ class WebEmbed {
       this.bootstrapped = true;
       this._tokenRetried = false; // a fresh authenticated document resets the budget
       this._stopRecovery();
+      const loadedUrl = typeof wc.getURL === 'function' ? wc.getURL() : '(unknown)';
+      this.log(`web loaded: ${loadedUrl}`);
+      this._finishLoad();
       if (process.env.DSH_HUD_DEV === '1') {
         wc.openDevTools({ mode: 'detach' });
       }
@@ -194,6 +204,9 @@ class WebEmbed {
       // and only renders the conversation header after the user enters a
       // session, which can happen minutes later. Dev-only, cheap, and it stops
       // on its own (30 samples x 10s).
+      // Sample once right away: in capture mode the app quits a few seconds
+      // after the screenshot, well before the first 10s tick.
+      try { this._maybeDumpTopRight(wc); } catch { /* detached */ }
       let samples = 0;
       const timer = setInterval(() => {
         samples += 1;
@@ -211,7 +224,8 @@ class WebEmbed {
     wc.on('did-fail-load', (_e, code, desc, url, isMainFrame) => {
       // -3 == ERR_ABORTED (navigation superseded) — ignore.
       if (!isMainFrame || code === -3) return;
-      console.error('[hud] web did-fail-load', code, desc, url);
+      this.log(`web load failed: ${code} ${desc} ${url}`);
+      this._finishLoad();
       this.showError('unreachable', `${desc} (${code})`);
     });
 
@@ -223,6 +237,8 @@ class WebEmbed {
       const status = details.statusCode;
       if (status < 400) return;
 
+      this.log(`web http status=${status} kind=${this.lastKind}`);
+      this._finishLoad();
       if (status === 401 && this.lastKind === 'clean' && !this._tokenRetried && this._hasDiscovery()) {
         // The cookie went stale/invalid while we were on the clean URL. The
         // plugin refreshes discovery every 15s, so retry once with whatever
@@ -235,6 +251,23 @@ class WebEmbed {
       }
       this.showError(status === 401 ? 'auth' : 'http', `HTTP ${status}`);
     });
+
+    // A dead renderer used to leave the panel permanently blank (no handler and
+    // no visible console in packaged builds). Recover instead of freezing.
+    wc.on('render-process-gone', (_e, details) => {
+      this.log(`web render-process-gone: reason=${details && details.reason} exit=${details && details.exitCode}`);
+      this._loading = false;
+      this._pendingLoad = null;
+      setTimeout(() => {
+        try {
+          this.reload({ forceToken: false });
+        } catch (err) {
+          this.log(`web reload after crash failed: ${err && err.message}`);
+        }
+      }, 400);
+    });
+    wc.on('unresponsive', () => this.log('web unresponsive'));
+    wc.on('responsive', () => this.log('web responsive again'));
   }
 
   _hasDiscovery() {
@@ -377,8 +410,30 @@ class WebEmbed {
     if (this.view && this.attached && b) this.view.setBounds(b);
   }
 
+  _finishLoad() {
+    this._loading = false;
+  }
+
   load({ forceToken = false } = {}) {
     if (!this.view) this.create();
+    if (this._loading) {
+      // A navigation is still in flight (recovery + retry + startDsh can race).
+      // Cancel it and start the newest one; two concurrent loadURL() calls on
+      // the same view used to leave it blank (user 2026-11-24).
+      try {
+        this.view.webContents.stop();
+        this.log('web load: cancelled the in-flight navigation');
+      } catch { /* view may be gone */ }
+    }
+    // P-02: a plugin from a newer/older release may write a different payload
+    // shape. Warn (once per value) but never block the load — the URL contract
+    // has been stable since v0.2, so the mismatch is informational.
+    const d0 = readDiscovery();
+    const pv = d0 ? protocolVersion(d0) : null;
+    if (pv !== null && pv !== PROTOCOL_VERSION && this._protocolWarned !== pv) {
+      this._protocolWarned = pv;
+      console.warn(`[hud] plugin protocol v${pv} differs from expected v${PROTOCOL_VERSION}; continuing`);
+    }
     const target = this._resolveTarget(forceToken);
     if (!target) {
       this.showError('unreachable', '未找到 discovery.json（DSH 服务可能未启动）');
@@ -386,10 +441,16 @@ class WebEmbed {
     }
     this.lastKind = target.kind;
     this._cssInjected = false; // re-inject on the fresh document
-    this.view.webContents.loadURL(target.url).catch((err) => {
-      console.error('[hud] loadURL failed:', err && err.message);
-      this.showError('unreachable', err && err.message);
-    });
+    this._loading = true;
+    this.log(`web load: kind=${target.kind} url=${target.url.replace(/token=[^&]+/, 'token=***')}`);
+    this.view.webContents
+      .loadURL(target.url)
+      .then(() => this._finishLoad())
+      .catch((err) => {
+        this.log(`web loadURL rejected: ${err && err.message}`);
+        this._finishLoad();
+        this.showError('unreachable', err && err.message);
+      });
   }
 
   reload({ forceToken = false } = {}) {
@@ -473,6 +534,7 @@ class WebEmbed {
   // spawn that launcher detached, then retry once after a short delay.
   startDsh() {
     const d = readDiscovery();
+    this.log(`startDsh: discovery ${d && d.url ? 'present' : 'missing'}`);
     if (d && d.url) {
       this.reload({ forceToken: true });
       return;

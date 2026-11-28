@@ -529,3 +529,19 @@ CSS 变量（深色默认 → 浅色覆盖）：
 | 双屏 / 跨 DPI | ⏸ 用户暂无第二块屏，暂不验证；保留为已知限制 |
 
 新发现待分析：默认主题下内嵌页左上角侧栏按钮被裁（见 `操作日志/待解决问题.md` P-10）。
+
+---
+
+## 12. 应用内更新（P-09）真机验证 — 2026-11-16 ✅
+
+- 装置：`artifacts/hud-e2e`（`dist/win-unpacked` 的副本，独立 `udd` 与 asar），本地更新源 `http://127.0.0.1:7911/manifest-10.json`，假包 10.0.0（`upd-test/app-10.0.0.asar`，505,829 B，sha256 `7d34712510a55b974aaeddafd6848a68f237937b837d5a3cc75b91f43aeeb82f`）。
+- 步骤：启动测试副本 → 右键「检查更新」→「下载并重启」。
+- 结果：
+  - `udd/hud.log`：`update: checking (current 0.4.2)` → `update: staged ...app.asar.new (505829 B)` → `update: helper spawned`；
+  - `udd/updater.log`：`swapped to 10.0.0 (backup kept)` → `relaunched ...DSH HUD.exe`；
+  - 替换后 `resources/app.asar` sha256 = `7d347125…`（10.0.0），`app.asar.bak` 保留 0.4.2 `d81c0375…`；
+  - 用户确认：窗口自动关闭并自行重启，标题变为「DSH 助手 · 更新成功 10.0.0」。
+- 过程中修复两个线上必现 bug：
+  1. helper 在 Electron 的 fs shim 下读 asar 失败（`ENOENT, not found in app.asar`）→ 顶部 `process.noAsar = true`；
+  2. helper 把 `ELECTRON_RUN_AS_NODE=1` 继承给重启进程，导致“重启”出来的是纯 Node、无窗口 → relaunch 前 `delete childEnv.ELECTRON_RUN_AS_NODE`。
+- 未覆盖：真实 GitHub Release 清单源（本次用本地源排除网络波动）；回滚未做自动化（`.bak` 在手，手工覆盖即回滚）。

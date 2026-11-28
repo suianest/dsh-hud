@@ -95,3 +95,15 @@ test('config: detectDesktopExe finds an exe in a common install location', () =>
   // Returns as soon as a candidate exists, before any powershell fallback.
   assert.equal(detectDesktopExe({ LOCALAPPDATA: la }), exePath);
 });
+
+test('config: ipcDir is the per-user hud folder (dev and packaged agree)', () => {
+  const repo = tempDir('dsh-cfg-ipc-');
+  const appPath = path.join(repo, 'app');
+  fs.mkdirSync(appPath, { recursive: true });
+
+  const withLa = loadConfig({ appPath, env: { LOCALAPPDATA: repo }, detectExe: () => '' }).config;
+  assert.equal(withLa.ipcDir, path.join(repo, 'dsh-hud', 'ipc'), 'LOCALAPPDATA wins');
+
+  const noLa = loadConfig({ appPath, env: {}, detectExe: () => '' }).config;
+  assert.equal(noLa.ipcDir, path.join(repo, 'artifacts', 'ipc'), 'install root is the fallback');
+});

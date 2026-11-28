@@ -156,9 +156,8 @@ body.demo-hover .capsule-icon .outline-path { animation: outline-run 2.6s linear
 .capsule-snap-top::after { top: -3px; left: 16px; right: 16px; height: 2px; opacity: 1; }
 .capsule-snap-bottom::after { bottom: -3px; left: 16px; right: 16px; height: 2px; opacity: 1; }
 
-/* ---------- 面板：鲸鱼边框 ----------
-   窗口 = 卡片(600×816) + 四周透明外边距（30/30/30/54），尾巴从卡片底下探出，
-   顶栏是一条白线稿海浪 + Q 版鲸鱼头装饰带（豆包 Seedream 生成，已抠底去绿边）。
+/* ---------- 面板（520×720 纯色卡片） ----------
+   贴图式「鲸鱼边框」方案已于 2026-11-10 回退，保留纯色卡片 + 圆角。
    卡片自己裁圆角（overflow:hidden），窗口本身透明、无阴影。 */
 .panel-shell { padding: 0; }
 
@@ -175,12 +174,17 @@ body.demo-hover .capsule-icon .outline-path { animation: outline-run 2.6s linear
   top: 0;
   left: 0;
   right: 0;
-  height: 46px;
+  height: 48px;
   display: flex;
   align-items: center;
   justify-content: space-between;
-  padding: 0 14px;
+  padding: 0 16px;
   -webkit-app-region: drag;
+  /* Hairline instead of a border so the bar does not gain 1px of height. */
+  box-shadow: inset 0 -1px 0 rgba(255, 255, 255, 0.055);
+}
+html[data-hud-theme="light"] .panel-header {
+  box-shadow: inset 0 -1px 0 rgba(23, 30, 56, 0.08);
 }
 
 .panel-header:active { cursor: grabbing; }
@@ -199,29 +203,47 @@ body.demo-hover .capsule-icon .outline-path { animation: outline-run 2.6s linear
 }
 
 .panel-btn {
-  width: 30px;
-  height: 30px;
+  width: 28px;
+  height: 28px;
   padding: 0;
   border: 0;
-  border-radius: 9px;
+  border-radius: 8px;
   background: var(--btn-bg);
   color: var(--btn-fg);
   font-size: 14px;
   line-height: 1;
   cursor: pointer;
-  transition: background 0.14s ease;
+  transition: background 0.14s ease, transform 0.12s ease;
 }
 
 .panel-btn:hover { background: var(--btn-bg-hover); }
+.panel-btn:active { transform: scale(0.94); }
+.panel-btn:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}
 .panel-btn:active { background: var(--btn-bg-active); }
+/* P-14(A): a newer npm release of the host plugin exists — a small dot on ⌘. */
+.panel-btn.has-update { position: relative; }
+.panel-btn.has-update::after {
+  content: '';
+  position: absolute;
+  top: 3px;
+  right: 3px;
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: #f59e0b;
+  box-shadow: 0 0 0 1.5px var(--panel-bg, #1e2130);
+}
 .panel-btn.danger:hover { background: var(--danger-hover); }
 
 .panel-body {
   position: absolute;
-  top: 60px;
-  left: 14px;
-  right: 14px;
-  bottom: 14px;
+  top: 62px;
+  left: 12px;
+  right: 12px;
+  bottom: 12px;
 }
 
 .web-host { position: absolute; inset: 0; }
@@ -232,27 +254,43 @@ body.demo-hover .capsule-icon .outline-path { animation: outline-run 2.6s linear
 .palette {
   position: absolute;
   left: 50%;
-  top: 88px;
+  top: 76px;
   transform: translateX(-50%);
-  width: 80%;
-  max-width: 520px;
+  width: 86%;
+  max-width: 540px;
   background: var(--card-bg);
   border: 1px solid rgba(150, 160, 190, 0.25);
-  border-radius: 14px;
+  border-radius: 16px;
   box-shadow: 0 12px 40px rgba(0, 0, 0, 0.4);
   z-index: 200;
   overflow: hidden;
 }
 .palette[hidden] { display: none; }
+
+/* Dim the shell behind the palette. Only visible while the palette is open,
+   i.e. while the WebContentsView is detached — otherwise a full-panel scrim
+   would cover the native view (DOM cannot paint above it). */
+.palette-backdrop {
+  position: absolute;
+  inset: 0;
+  background: rgba(8, 10, 20, 0.5);
+  z-index: 150;
+  /* Visual scrim only: it must not intercept clicks, otherwise the ⌘ button
+     under it can no longer toggle the palette closed. */
+  pointer-events: none;
+}
+.palette-backdrop[hidden] { display: none; }
+html[data-hud-theme="light"] .palette-backdrop { background: rgba(30, 36, 56, 0.28); }
 .palette-input {
   width: 100%;
-  padding: 14px;
+  padding: 15px 14px;
   border: 0;
   border-bottom: 1px solid rgba(150, 160, 190, 0.2);
   background: transparent;
   color: var(--fg);
   font: inherit;
-  font-size: 14px;
+  font-size: 15px;
+  letter-spacing: 0.2px;
   outline: none;
   user-select: text;
   -webkit-user-select: text;
@@ -276,7 +314,21 @@ body.demo-hover .capsule-icon .outline-path { animation: outline-run 2.6s linear
   text-overflow: ellipsis;
 }
 .palette-item.selected,
-.palette-item:hover { background: var(--btn-bg-hover); }
+.palette-item:hover {
+  background: rgba(79, 124, 255, 0.16);
+  box-shadow: inset 2px 0 0 var(--accent);
+}
+.palette-item.selected { color: var(--fg); }
+.palette-foot {
+  display: flex;
+  gap: 14px;
+  justify-content: flex-end;
+  padding: 7px 12px 9px;
+  border-top: 1px solid rgba(150, 160, 190, 0.16);
+  color: var(--fg-muted);
+  font-size: 11px;
+  letter-spacing: 0.2px;
+}
 .palette-empty {
   padding: 12px;
   color: var(--fg-muted);

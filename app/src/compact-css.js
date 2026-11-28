@@ -57,6 +57,12 @@ html[data-windows-titlebar] { --dsh-windows-titlebar-height: 0px !important; }
    Make it non-hit-testable; the sidebar column itself stays interactive. */
 [class*="drawerMask"] { pointer-events: none !important; opacity: 0 !important; background: transparent !important; }
 [class*="sidebarCol"] { pointer-events: auto !important; }
+
+/* C10 - P-10: the sidebar toggle is pulled up to overlap the desktop app's
+   native titlebar (rect y = -14 inside a 48px row), so the top of the icon is
+   cut by the view's top edge. Our panel has no native titlebar, so nudge it
+   back inside its own row. */
+[data-sidebar-toggle] { transform: translateY(14px) !important; }
 `;
 
 const { extraCss } = require('./extensions');

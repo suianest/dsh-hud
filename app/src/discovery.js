@@ -5,7 +5,7 @@
 // Host plugin (t2).
 //
 //   %LOCALAPPDATA%\dsh-hud\discovery.json
-//   { "pid": 12345, "port": "50265", "url": "http://127.0.0.1:50265/?token=...",
+//   { "pid": 12345, "port": 50265, "url": "http://127.0.0.1:50265/?token=...",
 //     "updatedAt": "2026-11-05T00:36:55.000Z" }
 //
 // `url` carries a one-shot login token. The token is consumed on the first
@@ -14,6 +14,9 @@
 // ---------------------------------------------------------------------------
 
 const fs = require('fs');
+
+// Payload version this build understands (see plugin/index.js PROTOCOL_VERSION).
+const PROTOCOL_VERSION = 1;
 const path = require('path');
 
 function _defaultDir() {
@@ -63,6 +66,12 @@ function cleanUrl(d) {
   }
 }
 
+// Protocol version the plugin wrote (null when an older plugin omitted it).
+function protocolVersion(d) {
+  if (!d || typeof d.protocolVersion !== 'number') return null;
+  return d.protocolVersion;
+}
+
 // Age of the discovery entry in ms (Infinity when unknown/unparseable).
 function ageMs(d) {
   if (!d || typeof d.updatedAt !== 'string') return Infinity;
@@ -80,4 +89,6 @@ function controlPath() {
   return path.join(path.dirname(p), 'control.json');
 }
 
-module.exports = { discoveryPath, readDiscovery, tokenUrl, cleanUrl, ageMs, controlPath };
+module.exports = {
+  PROTOCOL_VERSION,
+  protocolVersion, discoveryPath, readDiscovery, tokenUrl, cleanUrl, ageMs, controlPath };

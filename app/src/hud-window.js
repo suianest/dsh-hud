@@ -59,6 +59,18 @@ function diag(msg) {
   } catch (_) { /* best effort */ }
 }
 
+// "0.5.6" > "0.5.5"; pre-release suffixes compare as their numeric prefix.
+function isNewerVersion(candidate, current) {
+  const parse = (v) => String(v || '0').replace(/^v/i, '').split('.').map((n) => parseInt(n, 10) || 0);
+  const a = parse(candidate);
+  const b = parse(current);
+  for (let i = 0; i < Math.max(a.length, b.length); i++) {
+    const d = (a[i] || 0) - (b[i] || 0);
+    if (d !== 0) return d > 0;
+  }
+  return false;
+}
+
 class HudWindow {
   constructor() {
     // Portable config (t26): env DSH_HUD_* -> config.local.json -> detect ->
@@ -74,6 +86,8 @@ class HudWindow {
     this.hotkey = null; // hotkey controller (src/hotkeys.js)
     this._animatingOut = false; // true while the panel plays its collapse animation
     this._collapseTimer = null; // fallback timer for the collapse animation
+    this._revealPending = false; // capsule<->panel switch is waiting for a paint
+    this._revealTimer = null; // fallback timer for the paint handshake
     this.web = null; // WebEmbed (embedded DSH Web UI, t6)
     this._webBounds = null; // last #web-host rect from the shell renderer
     this._rightbarOpen = false; // DSH page's right column is expanded
@@ -83,6 +97,7 @@ class HudWindow {
     this._paletteOpen = false; // command palette overlay is visible (t35)
     this._panelUserSize = null; // last panel size the user dragged to (t38 B1)
     this._paletteItems = null; // Map<id, run()> for the open palette (t35)
+    this._pluginUpdate = null; // {current, latest} from the host plugin (P-14 A)
   }
 
   // True when transparent mode is active. DSH_HUD_OPAQUE=1 forces the opaque
@@ -136,6 +151,7 @@ class HudWindow {
     this.win = win;
     this.web = new WebEmbed(win);
     this.web.create(); // create the view + wire its load/error events (no attach yet)
+    this.web.log = (msg) => this._log(msg); // surface web lifecycle in hud.log
     this.web.onEscape = () => this.collapse(); // Esc inside the embedded UI collapses
     this.web.onTheme = (theme) => this._pushTheme(theme); // page theme -> shell colors (t34)
     this.web.onCommand = () => this._togglePalette(); // Ctrl+K inside the embedded UI (t35)
@@ -172,6 +188,9 @@ class HudWindow {
     const wasPanel = this.mode === 'panel';
     this.mode = 'capsule'; // set FIRST so the blur handler won't re-enter
     const pos = this._capsulePosition();
+    // 面板→胶囊：窗口尺寸先变、内容还是面板布局，会闪一帧面板（2026-11-16）。
+    // 先清零不透明度，等 renderer 画出胶囊那一帧再显示。
+    if (wasPanel) this._holdReveal();
 
     if (wasPanel && releaseFocus) {
       // 焦点策略(收起)：hide() 让 Windows 把前台焦点还给 Z 序里的上一个
@@ -187,6 +206,7 @@ class HudWindow {
 
     this._hideWeb();
     this._emitState();
+    if (wasPanel) this._armReveal();
   }
 
   showPanel() {
@@ -203,8 +223,11 @@ class HudWindow {
       this._emitState();
       return;
     }
+    const expanding = this.mode !== 'panel';
     this.mode = 'panel';
     const pos = this._panelPosition(this._panelSize());
+    // 胶囊→面板：窗口先放大，胶囊 DOM 在新尺寸下会错位一帧（用户 2026-11-16）。
+    if (expanding) this._holdReveal();
     this._applyBounds(pos, this._panelSize());
     this.win.show();
     // 焦点策略(展开)：聚焦窗口；renderer 收到 state=panel 后上报 #web-host
@@ -216,6 +239,36 @@ class HudWindow {
     // went nowhere (t13 #9).
     if (this.web) this.web.focus();
     this._emitState();
+    if (expanding) this._armReveal();
+  }
+
+  // --- reveal handshake (anti-flash across capsule/panel switches) ----------
+  // The window is resized before the renderer has repainted, so for one frame
+  // the old layout is shown in the new geometry. Hiding the window content for
+  // that single frame removes the glitch. The renderer acks with hud:painted
+  // after two rAFs; a timer is the fallback if the ack never arrives.
+  _holdReveal() {
+    if (!this.win || this.win.isDestroyed()) return;
+    this._revealPending = true;
+    try { this.win.setOpacity(0); } catch { /* not supported */ }
+  }
+
+  _armReveal() {
+    if (!this._revealPending) return;
+    if (this._revealTimer) clearTimeout(this._revealTimer);
+    this._revealTimer = setTimeout(() => this._reveal(), REVEAL_FALLBACK_MS);
+  }
+
+  _reveal() {
+    if (this._revealTimer) {
+      clearTimeout(this._revealTimer);
+      this._revealTimer = null;
+    }
+    if (!this._revealPending) return;
+    this._revealPending = false;
+    if (this.win && !this.win.isDestroyed()) {
+      try { this.win.setOpacity(1); } catch { /* not supported */ }
+    }
   }
 
   // --- press-and-drag edge resize -------------------------------------------
@@ -405,6 +458,14 @@ class HudWindow {
           this._openTokenWindow();
         },
       },
+      {
+        // P-09: in-app update, MVP scope (app.asar only, ~0.5 MB).
+        label: '检查更新',
+        click: () => {
+          this._log('menu: "检查更新" clicked');
+          this._checkUpdate().catch((err) => this._log('update check threw: ' + (err && err.message)));
+        },
+      },
       { type: 'separator' },
       {
         // 用户 2026-11-08：胶囊不再有 hover 关闭按钮，退出统一收进右键菜单。
@@ -458,6 +519,75 @@ class HudWindow {
   // A plain window (native frame, so it can be moved/closed normally) that
   // shows the DeepSeek usage/top-up page. Reuses one window: a second click
   // raises the existing one instead of stacking new copies.
+  /**
+   * P-09: check the static manifest, then download + stage the new asar and
+   * hand it to `updater.cjs` (a real Node process) right before quitting.
+   */
+  async _checkUpdate() {
+    const { dialog } = require('electron');
+    const updater = require('./updater');
+    const current = app.getVersion();
+    this._log('update: checking (current ' + current + ')');
+    const r = await updater.checkForUpdate({ current });
+    if (r.status === 'up-to-date') {
+      this._log('update: up to date (' + current + ')');
+      await dialog.showMessageBox(this.win, {
+        type: 'info',
+        message: '已是最新版本',
+        detail: '当前版本 v' + current,
+        buttons: ['好'],
+      });
+      return;
+    }
+    if (r.status === 'error') {
+      this._log('update: check failed: ' + r.error);
+      await dialog.showMessageBox(this.win, {
+        type: 'error',
+        message: '检查更新失败',
+        detail: String(r.error || ''),
+        buttons: ['好'],
+      });
+      return;
+    }
+    const ask = await dialog.showMessageBox(this.win, {
+      type: 'question',
+      message: '发现新版本 v' + r.latest,
+      detail: (r.notes ? r.notes + '\n\n' : '') + '只需下载约 0.5 MB 的界面包，重启后生效。',
+      buttons: ['下载并重启', '稍后'],
+      defaultId: 0,
+      cancelId: 1,
+    });
+    if (ask.response !== 0) return;
+
+    const staged = await updater.downloadUpdate(r, { destDir: path.join(app.getPath('userData'), 'update') });
+    this._log('update: staged ' + staged.staged + ' (' + staged.size + ' B)');
+    const pendingFile = path.join(app.getPath('userData'), 'update-pending.json');
+    updater.writePending({
+      pendingFile,
+      staged: staged.staged,
+      version: r.latest,
+      exe: process.execPath,
+      args: process.argv.slice(1),
+      asar: path.join(process.resourcesPath, 'app.asar'),
+    });
+    const helper = app.isPackaged
+      ? path.join(process.resourcesPath, 'updater.cjs')
+      : path.join(__dirname, '..', 'updater.cjs');
+    try {
+      spawn(process.execPath, [helper, pendingFile], {
+        detached: true,
+        stdio: 'ignore',
+        cwd: path.dirname(helper),
+        env: { ...process.env, ELECTRON_RUN_AS_NODE: '1' },
+      }).unref();
+      this._log('update: helper spawned');
+    } catch (err) {
+      this._log('update: helper spawn failed: ' + (err && err.message));
+      return;
+    }
+    app.quit();
+  }
+
   _openTokenWindow() {
     try {
       if (this._tokenWin && !this._tokenWin.isDestroyed()) {
@@ -571,7 +701,21 @@ class HudWindow {
   // 会先给已经在前台的窗口一次 minimize→restore 的「弹一下」，否则用户看不
   // 出任何变化。激活期间临时让出置顶，避免胶囊/面板挡住刚调上来的窗口。
   _openDshDesktop() {
-    const exe = this.config.dshExe;
+    let exe = this.config.dshExe;
+    if (!exe) {
+      // Low IL cannot read the desktop process path; the plugin (Medium) puts it
+      // in discovery.json, so use that instead of failing silently.
+      try {
+        const d = require('./discovery').readDiscovery();
+        if (d && typeof d.dshExe === 'string' && fs.existsSync(d.dshExe)) {
+          exe = d.dshExe;
+          this.config.dshExe = exe;
+          this._log('desktop exe from discovery: ' + exe);
+        }
+      } catch (err) {
+        this._log('discovery exe lookup failed: ' + (err && err.message));
+      }
+    }
 
     // Fold the panel down first: the panel renders the same DSH conversation
     // over most of the screen, so a desktop window opening *behind* it looks
@@ -600,6 +744,14 @@ class HudWindow {
         return;
       }
       this._log('host bridge unavailable, falling back to local launch');
+      // Spawning a second DSH from this Low-IL process is what made the click
+      // look "silent": the copy cannot hand off to the Medium-IL primary and
+      // exits without ever showing a window (report 2026-11-23).
+      if (this._isDesktopRunning()) {
+        this._log('desktop already running; skipped spawning another instance');
+        this._notify('DSH 桌面已在运行，但 HUD 无权把它提到前台。请启用 dsh-hud-capsule 插件桥接，或直接点任务栏里的 DSH。');
+        return;
+      }
       this._launchDshDesktop(exe);
       setTimeout(() => this._focusDshDesktop({ quiet: true }), 900);
     });
@@ -625,7 +777,7 @@ class HudWindow {
       }
       const started = Date.now();
       const poll = () => {
-        if (Date.now() - started > 6000) {
+        if (Date.now() - started > 12000) {
           this._log('host request timeout');
           resolve(null);
           return;
@@ -705,6 +857,48 @@ class HudWindow {
       this._log('desktop notification: ' + body);
     } catch (err) {
       this._log('desktop notification failed: ' + (err && err.message));
+    }
+  }
+
+  // One tasklist probe, cached briefly so repeated clicks do not spawn a
+  // process each time. Only used to avoid starting a doomed second instance.
+  _isDesktopRunning() {
+    const now = Date.now();
+    if (this._desktopProbe && now - this._desktopProbe.at < 2000) {
+      return this._desktopProbe.running;
+    }
+    let running = false;
+    let probeFailed = false;
+    try {
+      const out = execFileSync(
+        'tasklist',
+        ['/FI', 'IMAGENAME eq DeepSeek Harness.exe', '/NH'],
+        { encoding: 'utf8', timeout: 4000, windowsHide: true }
+      );
+      running = /DeepSeek Harness\.exe/i.test(out || '');
+    } catch (err) {
+      probeFailed = true;
+      this._log('desktop probe failed: ' + (err && err.message));
+    }
+    // A failed probe is not proof that nothing is running; assuming so launched
+    // a doomed second instance (the silent-failure report).
+    if (probeFailed) running = true;
+    this._desktopProbe = { at: now, running };
+    return running;
+  }
+
+  // Tray-style notification for feedback that must not depend on the panel.
+  _notify(body) {
+    try {
+      const { Notification } = require('electron');
+      if (!Notification || typeof Notification.isSupported !== 'function' || !Notification.isSupported()) {
+        this._log('notification unsupported: ' + body);
+        return;
+      }
+      new Notification({ title: 'DSH HUD', body, silent: true }).show();
+      this._log('notification: ' + body);
+    } catch (err) {
+      this._log('notification failed: ' + (err && err.message));
     }
   }
 
@@ -985,12 +1179,42 @@ class HudWindow {
     return this._clamp({ x, y, width: size.width, height: size.height }, wa);
   }
 
+  // The host plugin only *notices* a newer npm release (P-14 A). Keep it in
+  // memory and surface a badge + one palette entry; nothing is auto-installed.
+  setPluginUpdate(data) {
+    const latest = data && typeof data.latest === 'string' ? data.latest : null;
+    const current = data && typeof data.current === 'string' ? data.current : null;
+    if (!latest) return;
+    // Defence in depth: the plugin already filters, but never advertise a
+    // version we are not actually behind (or a downgrade).
+    if (current && !isNewerVersion(latest, current)) {
+      this._log(`plugin update ignored: current=${current} latest=${latest}`);
+      if (this._pluginUpdate) {
+        this._pluginUpdate = null;
+        this._emitState();
+      }
+      return;
+    }
+    this._pluginUpdate = { current, latest };
+    this._log(`plugin update: current=${current} latest=${latest}`);
+    this._emitState();
+  }
+
+  _copyPluginGuide() {
+    const latest = this._pluginUpdate ? this._pluginUpdate.latest : 'latest';
+    const text = `pnpm add dsh-hud-capsule@${latest}`;
+    try { clipboard.writeText(text); } catch { /* no clipboard */ }
+    this._log(`palette: plugin update guide copied (${text})`);
+    this._closePalette();
+  }
+
   _emitState() {
     if (this.win && !this.win.isDestroyed()) {
-      this.win.webContents.send('hud:state', {
-        mode: this.mode,
-        opaque: !this.isTransparent(),
-      });
+      const payload = { mode: this.mode, opaque: !this.isTransparent() };
+      // Only present when the host plugin reported a newer npm release, so the
+      // common payload keeps its original shape (tests + renderer both rely on it).
+      if (this._pluginUpdate) payload.pluginUpdate = this._pluginUpdate;
+      this.win.webContents.send('hud:state', payload);
     }
   }
 
@@ -1136,6 +1360,8 @@ class HudWindow {
     this._onCollapseDone = () => {
       if (this._animatingOut) this._finishCollapse();
     };
+    // Renderer painted the new mode -> drop the anti-flash opacity hold.
+    this._onPainted = () => this._reveal();
     this._onQuit = () => this.quit();
 
     // ---- embedded Web UI (t6) ----
@@ -1197,6 +1423,7 @@ class HudWindow {
     ipcMain.on('hud:drag-end', this._onDragEnd);
     ipcMain.on('hud:collapse', this._onCollapse);
     ipcMain.on('hud:collapse-done', this._onCollapseDone);
+    ipcMain.on('hud:painted', this._onPainted);
     ipcMain.on('hud:quit', this._onQuit);
     ipcMain.on('hud:web-bounds', this._onWebBounds);
     ipcMain.on('hud:web-retry', this._onWebRetry);
@@ -1206,6 +1433,14 @@ class HudWindow {
     ipcMain.on('hud:resize-start', this._onResizeStart);
     ipcMain.on('hud:resize-move', this._onResizeMove);
     ipcMain.on('hud:resize-end', () => this._endEdgeResize(false));
+    this._onContextMenu = () => {
+      try {
+        Menu.buildFromTemplate(this.buildContextMenu()).popup({ window: this.win });
+      } catch (err) {
+        this._log('context menu failed: ' + (err && err.message));
+      }
+    };
+    ipcMain.on('hud:context-menu', this._onContextMenu);
     ipcMain.on('hud:palette-exec', this._onPaletteExec);
     ipcMain.on('hud:palette-close', this._onPaletteClose);
     ipcMain.on('hud:palette-open-request', this._onPaletteOpenRequest);
@@ -1238,7 +1473,16 @@ class HudWindow {
       { id: 'open-dsh-desktop', label: '打开 DSH 桌面窗口', run: () => this._openDshDesktop() },
       { id: 'open-dsh-panel', label: '打开 DSH 浮窗', run: () => this.showPanel() },
       { id: 'token-topup', label: 'Token 补充', run: () => this._openTokenWindow() },
+      { id: 'check-update', label: '检查更新', run: () => this._checkUpdate().catch(() => {}) },
+      // 测试项：只验证「仓库改动 → 构建 → 运行中的面板」这条通路，不做任何事。
     ];
+    if (this._pluginUpdate) {
+      builtin.push({
+        id: 'plugin-update',
+        label: `插件有新版本 v${this._pluginUpdate.latest}（复制升级命令）`,
+        run: () => this._copyPluginGuide(),
+      });
+    }
     const items = builtin.slice();
     try {
       extensionMenuItems({ hud: this }).forEach((item, i) => {
@@ -1250,6 +1494,7 @@ class HudWindow {
     }
     this._paletteItems = new Map(items.map((it) => [it.id, it.run]));
     this._paletteOpen = true;
+    this._log('palette open request (toggling)');
     this.web.detach(); // hide the native view so the DOM palette is clickable
     if (this.win && !this.win.isDestroyed()) {
       this.win.webContents.send('hud:palette-open', {
@@ -1262,6 +1507,13 @@ class HudWindow {
     if (!this._paletteOpen) return;
     this._paletteOpen = false;
     this._paletteItems = null;
+    this._log('palette closed');
+    // Hide the DOM overlay as well: main can close the palette on its own
+    // (⌘ toggle / Ctrl+K / collapse), so the renderer would otherwise keep the
+    // panel visible above the re-attached view.
+    if (this.win && !this.win.isDestroyed()) {
+      try { this.win.webContents.send('hud:palette-close'); } catch { /* gone */ }
+    }
     // Re-attach the embedded view and give focus back to its input.
     if (this.web) {
       this.web.attach();
@@ -1336,12 +1588,18 @@ class HudWindow {
       this.web = null;
     }
 
+    if (this._revealTimer) {
+      clearTimeout(this._revealTimer);
+      this._revealTimer = null;
+    }
+
     const ipcPairs = [
       ['hud:drag-start', this._onDragStart],
       ['hud:drag-move', this._onDragMove],
       ['hud:drag-end', this._onDragEnd],
       ['hud:collapse', this._onCollapse],
       ['hud:collapse-done', this._onCollapseDone],
+      ['hud:painted', this._onPainted],
       ['hud:quit', this._onQuit],
       ['hud:web-bounds', this._onWebBounds],
       ['hud:web-retry', this._onWebRetry],
@@ -1350,6 +1608,7 @@ class HudWindow {
       ['hud:web-theme', this._onWebTheme],
       ['hud:resize-start', this._onResizeStart],
       ['hud:resize-move', this._onResizeMove],
+      ['hud:context-menu', this._onContextMenu],
       ['hud:palette-exec', this._onPaletteExec],
       ['hud:palette-close', this._onPaletteClose],
       ['hud:palette-open-request', this._onPaletteOpenRequest],
@@ -1372,3 +1631,7 @@ class HudWindow {
 }
 
 module.exports = HudWindow;
+
+// Reveal handshake: how long to wait for the renderer's paint ack before
+// showing the window anyway (a dropped ack must never leave it invisible).
+const REVEAL_FALLBACK_MS = 160;

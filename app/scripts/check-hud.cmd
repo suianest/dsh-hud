@@ -16,7 +16,7 @@ if not defined NODE (
 )
 
 set "FAIL=0"
-for %%F in (main.js preload.js src\constants.js src\window-state.js src\hotkeys.js src\hud-window.js src\discovery.js src\compact-css.js src\web-embed.js src\autostart.js src\control.js src\config.js renderer\hud.js renderer\web-preload.js renderer\host-bounds.js) do (
+for %%F in (main.js preload.js src\constants.js src\window-state.js src\hotkeys.js src\hud-window.js src\discovery.js src\compact-css.js src\web-embed.js src\autostart.js src\control.js src\config.js src\updater.js src\shortcut.js src\extensions.js renderer\hud.js renderer\web-preload.js renderer\host-bounds.js) do (
   "%NODE%" --check "%ROOT%\%%F" >nul 2>&1
   if errorlevel 1 (
     echo [check] FAIL %%F

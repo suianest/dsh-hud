@@ -80,14 +80,23 @@ function devUserDataDir() {
 // folder (probed: EPERM). The Cordis host is Medium, so ask it over the same
 // request.json bridge the desktop-focus action uses.
 function requestHostApply(enabled) {
-  const ipcDir = path.join(REPO_ROOT, 'artifacts', 'ipc');
+  // Use the same per-user directory the HUD bridge and the plugin agree on
+  // (config.ipcDir). REPO_ROOT/artifacts/ipc was a pre-0.5.8 location and
+  // split the two sides (user 2026-11-24).
+  let ipcDir = '';
+  try {
+    ipcDir = require('./config').loadConfig().ipcDir || '';
+  } catch {
+    /* fall through to the legacy location */
+  }
+  if (!ipcDir) ipcDir = path.join(REPO_ROOT, 'artifacts', 'ipc');
   const file = path.join(ipcDir, 'request.json');
   const tmp = path.join(ipcDir, `request.${process.pid}.${Date.now()}.tmp`);
   const payload = {
     id: 'autostart-' + Date.now(),
     action: 'autostart',
     enabled: !!enabled,
-    at: new Date().toISOString(),
+    at: Date.now(),
   };
   try {
     fs.mkdirSync(ipcDir, { recursive: true });

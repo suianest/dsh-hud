@@ -60,6 +60,7 @@ const HudWindow = require('./src/hud-window');
 const autostart = require('./src/autostart');
 const { ControlBridge } = require('./src/control');
 const extensions = require('./src/extensions');
+const shortcut = require('./src/shortcut');
 
 // Keep all profile/crashpad writes inside a known dir. Defaults to the OS
 // standard (%APPDATA%\<app name>); override for sandboxed/dev runs. When the
@@ -116,6 +117,10 @@ if (!gotLock) {
   console.error('[hud] another instance is already running (single-instance lock) - exiting');
   app.quit();
 } else {
+  // Windows toasts (the desktop-focus feedback) only show when the process has
+  // an AppUserModelID; without it Notification.isSupported() is false.
+  app.setAppUserModelId('com.suianest.dsh-hud');
+
   let hud = null;
   let control = null;
 
@@ -128,6 +133,17 @@ if (!gotLock) {
   app.whenReady().then(() => {
     // 开机自启：应用用户持久化的选择（首次运行/无配置文件时不触碰）。
     autostart.apply();
+
+    // 开始菜单入口（P-08）：插件形态没有桌面快捷方式，关掉自启后需要可点
+    // 的入口；只在打包版首次运行时创建一次，失败仅记日志。
+    try {
+      shortcut.ensureStartMenuShortcut({
+        isPackaged: app.isPackaged,
+        log: (line) => bootLog(line),
+      });
+    } catch (err) {
+      bootLog(`[hud] start-menu shortcut crashed: ${(err && err.message) || err}`);
+    }
 
     // 外部扩展（P-03）：exe 同级 extensions/ 与 userData/extensions/ 下的
     // *.js 会在建窗前加载，注册进 menu / control / css 三个扩展点。
@@ -159,6 +175,12 @@ if (!gotLock) {
         show: () => { if (hud) hud.showPanel(); },
         hide: () => { if (hud) hud.showCapsule(); },
         reload: () => { if (hud) hud.reloadWeb(); },
+        // /dsh-hud off → graceful exit (plugin waits for the process to go away).
+        quit: () => { app.quit(); },
+        // P-14(A): the plugin noticed a newer npm release; surface it in the HUD.
+        'plugin-update': (obj) => {
+          if (hud && obj && obj.data) hud.setPluginUpdate(obj.data);
+        },
       },
       { statePath: path.join(app.getPath('userData'), 'control-state.json') }
     );
@@ -237,6 +259,17 @@ function runCaptureFlow(hud) {
   const capturePanel = async () => {
     if (done) return;
     done = true;
+    // DSH_HUD_CAPTURE_PALETTE=1: open the command palette first so the shell
+    // screenshot shows the real overlay (dev aid only, off by default).
+    const withPalette = process.env.DSH_HUD_CAPTURE_PALETTE === '1';
+    if (withPalette) {
+      try {
+        hud._openPalette();
+        await delay(700);
+      } catch (err) {
+        console.error('[hud] palette capture open failed:', err && err.message);
+      }
+    }
     try {
       const shellImg = await hud.win.webContents.capturePage();
       writeCapture(paths.panelShell, shellImg.toPNG());
@@ -247,7 +280,36 @@ function runCaptureFlow(hud) {
     } catch (err) {
       console.error('[hud] panel capture failed:', err && err.message);
     }
+    if (withPalette) {
+      try { hud._closePalette(); } catch { /* ignore */ }
+    }
+    if (process.env.DSH_HUD_CAPTURE_COLLAPSE === '1') {
+      await captureCollapseTransition();
+      return;
+    }
     await captureCapsule();
+  };
+
+  // Dev aid: capture the panel->capsule transition frame by frame. The glitch
+  // we are chasing only exists for a frame or two around the resize, so grab a
+  // few stills right after the collapse animation ends.
+  const captureCollapseTransition = async () => {
+    const dir = path.dirname(paths.panelShell);
+    hud.collapse();
+    const marks = [['collapse-a', 150], ['collapse-b', 178], ['collapse-c', 240]];
+    let prev = 0;
+    for (const [name, at] of marks) {
+      await delay(at - prev);
+      prev = at;
+      try {
+        const img = await hud.win.webContents.capturePage();
+        const file = path.join(dir, name + '.png');
+        writeCapture(file, img.toPNG());
+      } catch (err) {
+        console.error('[hud] collapse capture failed:', err && err.message);
+      }
+    }
+    app.quit();
   };
 
   const captureCapsule = async () => {

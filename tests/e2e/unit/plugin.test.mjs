@@ -20,6 +20,16 @@ import os from 'node:os';
 import path from 'node:path';
 import { pathToFileURL } from 'node:url';
 
+// Unit tests must never touch real machine state: no Startup\dsh-hud.cmd, no
+// scheduled-task rewrite, no 150 MB release download, no follow-DSH launch.
+// Tests that exercise those paths opt back in explicitly (withPackagedHud).
+process.env.DSH_HUD_NO_LAUNCH_TASK = '1';
+process.env.DSH_HUD_NO_STARTMENU = '1';
+process.env.DSH_HUD_NO_AUTO_INSTALL = '1';
+// P-14(A): the update check would hit registry.npmjs.org — never in unit tests.
+process.env.DSH_HUD_NO_PLUGIN_UPDATE = '1';
+process.env.DSH_HUD_AUTOSTART_WITH_DSH = '0';
+
 const HERE = path.dirname(new URL(import.meta.url).pathname.replace(/^\/([A-Za-z]:)/, '$1'));
 const ROOT = path.resolve(HERE, '..', '..', '..');
 const PLUGIN = path.resolve(ROOT, 'plugin', 'index.js');
@@ -27,6 +37,7 @@ const APP_DIR = path.resolve(ROOT, 'app');
 const ELECTRON = path.resolve(ROOT, 'runtime', 'node_modules', 'electron', 'dist', 'electron.exe');
 const NODE = process.execPath;
 const LAUNCHER = path.resolve(ROOT, 'app', 'scripts', 'launch-hud.cjs');
+process.env.DSH_HUD_AUTOSTART_WITH_DSH = '0';
 const plugin = await import(pathToFileURL(PLUGIN).href);
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
@@ -164,11 +175,13 @@ test('apply: writes discovery with token URL and spawns HUD via node launcher wi
       try { return await readJson(env.discovery); } catch { return null; }
     }, { label: 'discovery.json' });
 
-    assert.equal(d.port, '51234');
+    assert.equal(typeof d.port, 'number', 'P-15-2: discovery.port must be a number');
+    assert.equal(d.port, 51234);
     assert.equal(d.url, 'http://127.0.0.1:51234/?token=T0K');
     assert.equal(d.pid, process.pid);
     assert.ok(!('origin' in d), 'origin is internal only and must not be persisted');
     assert.ok(Date.parse(d.updatedAt) > 0);
+    assert.equal(d.protocolVersion, 1, 'payload carries the protocol version for P-02 compatibility');
 
     const spawn = await waitFor(() => h.spawns[0], { label: 'spawn' });
     assert.deepEqual(spawn.spec.argv, [NODE, LAUNCHER]);
@@ -247,7 +260,8 @@ test('refresh: keeps the token fresh and emits reload + stdin only when the orig
 
     const d = await readJson(env.discovery);
     assert.match(d.url, /token=T1/);
-    assert.equal(d.port, '51235');
+    assert.equal(typeof d.port, 'number', 'P-15-2: discovery.port must be a number');
+    assert.equal(d.port, 51235);
 
     const control = await waitFor(async () => {
       try { return await readJson(env.control); } catch { return null; }
@@ -273,25 +287,25 @@ test('command: /dsh-hud toggle|show|hide|reload reuses one child and notifies co
     await waitFor(() => h.spawns[0], { label: 'spawn' });
     const handle = h.commands[0];
 
-    const show = handle.handler({ rawInput: 'show' });
+    const show = await handle.handler({ rawInput: 'show' });
     assert.equal(show.kind, 'success');
     assert.match(show.text, /打开/);
     assert.equal(h.spawns.length, 1, 'a command must not spawn a second HUD');
 
-    const hide = handle.handler({ rawInput: 'hide' });
+    const hide = await handle.handler({ rawInput: 'hide' });
     assert.match(hide.text, /隐藏/);
 
-    const toggle1 = handle.handler({ rawInput: '' });
+    const toggle1 = await handle.handler({ rawInput: '' });
     assert.match(toggle1.text, /打开/);
-    const toggle2 = handle.handler({ rawInput: 'toggle' });
+    const toggle2 = await handle.handler({ rawInput: 'toggle' });
     assert.match(toggle2.text, /隐藏/);
 
-    const reload = handle.handler({ rawInput: 'reload' });
+    const reload = await handle.handler({ rawInput: 'reload' });
     assert.match(reload.text, /重载/);
 
     // 扩展点 2（t30）：未知动作不再回退成 toggle，而是原样透传给 control.json，
     // 由 app 侧 registerControlAction 注册的 handler 处理。
-    const unknown = handle.handler({ rawInput: 'nonsense' });
+    const unknown = await handle.handler({ rawInput: 'nonsense' });
     assert.equal(unknown.kind, 'success', 'unknown input is forwarded as a custom action');
     assert.match(unknown.text, /自定义动作/);
 
@@ -347,7 +361,7 @@ test('command: running HUD (fresh pre-existing discovery, no child) replies succ
     await waitFor(async () => {
       try { return (await readJson(env.discovery)).url.includes('T0K'); } catch { return false; }
     }, { label: 'discovery rewritten by apply' });
-    const show = h.commands[0].handler({ rawInput: 'show' });
+    const show = await h.commands[0].handler({ rawInput: 'show' });
     assert.equal(show.kind, 'success');
     assert.match(show.text, /打开/);
     assert.ok(!show.text.includes('未在运行'), `expected success text, got: ${show.text}`);
@@ -367,7 +381,7 @@ test('command: absent HUD (no discovery, no child) replies not-running', async (
     await waitFor(async () => {
       try { return (await readJson(env.discovery)).url.includes('T0K'); } catch { return false; }
     }, { label: 'discovery written' });
-    const show = h.commands[0].handler({ rawInput: 'show' });
+    const show = await h.commands[0].handler({ rawInput: 'show' });
     assert.equal(show.kind, 'success');
     assert.ok(show.text.includes('未在运行'), `expected not-running text, got: ${show.text}`);
     await sleep(60); // let the control.json write settle before dispose
@@ -573,6 +587,27 @@ test('t36: resolveHud finds a packaged exe via hudDir (apply logs "found HUD")',
   }
 });
 
+test('t39: resolveHud prefers the new app/DSH HUD.exe layout over the old flat one', async () => {
+  const env = await makeLocalAppData();
+  const hudDir = await fsp.mkdtemp(path.join(os.tmpdir(), 'dsh-hud-p06-'));
+  const oldExe = path.join(hudDir, 'DSH HUD.exe');
+  const newExe = path.join(hudDir, 'app', 'DSH HUD.exe');
+  await fsp.mkdir(path.dirname(newExe), { recursive: true });
+  await fsp.writeFile(oldExe, 'old-layout', 'utf8');
+  await fsp.writeFile(newExe, 'new-layout', 'utf8');
+
+  try {
+    const res = plugin.resolveHud({ hudDir });
+    assert.equal(res.found, true);
+    assert.equal(res.mode, 'exe');
+    assert.equal(res.exe, newExe);
+    assert.equal(res.root, hudDir);
+  } finally {
+    await fsp.rm(hudDir, { recursive: true, force: true });
+    await env.cleanup();
+  }
+});
+
 test('t36: missing HUD degrades to a readable hint; apply and command do not throw', async () => {
   const env = await makeLocalAppData();
   const empty = await fsp.mkdtemp(path.join(os.tmpdir(), 'dsh-hud-empty-'));
@@ -604,7 +639,7 @@ test('t36: missing HUD degrades to a readable hint; apply and command do not thr
       errors.some((l) => l.includes('未找到 HUD')),
       `expected missing-HUD log, got: ${errors.join(' | ')}`,
     );
-    const show = h.commands[0].handler({ rawInput: 'show' });
+    const show = await h.commands[0].handler({ rawInput: 'show' });
     assert.equal(show.kind, 'success');
     assert.ok(show.text.includes('未找到 HUD'), `expected not-found reason, got: ${show.text}`);
   } finally {
@@ -612,5 +647,187 @@ test('t36: missing HUD degrades to a readable hint; apply and command do not thr
     if (dispose) dispose();
     await fsp.rm(empty, { recursive: true, force: true });
     await env.cleanup();
+  }
+});
+
+// --- P-07: first-run autostart for a packaged install ---------------------
+
+async function withPackagedHud(fn, { cookie } = {}) {
+  const env = await makeLocalAppData();
+  const prevAppData = process.env.APPDATA;
+  const prevUserData = process.env.DSH_HUD_USER_DATA;
+  const prevStartMenu = process.env.DSH_HUD_NO_STARTMENU;
+  const prevAutoStart = process.env.DSH_HUD_AUTOSTART_WITH_DSH;
+  const prevLaunchTask = process.env.DSH_HUD_NO_LAUNCH_TASK;
+  // The Start-menu shortcut needs a real PowerShell + COM round-trip; tests
+  // assert the decision logic instead of driving WScript.Shell.
+  process.env.DSH_HUD_NO_STARTMENU = '1';
+  // Never launch the real capsule from a unit test (auto-start uses a scheduled task).
+  process.env.DSH_HUD_AUTOSTART_WITH_DSH = '0';
+  // The launch task would be registered against the throwaway %TEMP% exe above;
+  // a leftover task then pops "找不到文件" on every logon (2026-11-16 incident).
+  process.env.DSH_HUD_NO_LAUNCH_TASK = '1';
+  const roaming = await fsp.mkdtemp(path.join(os.tmpdir(), 'dsh-hud-roaming-'));
+  const isolatedUserData = await fsp.mkdtemp(path.join(os.tmpdir(), 'dsh-hud-userdata-'));
+  process.env.APPDATA = roaming;
+  // The fixture exe lives under the temp dir; allow it for this scope only.
+  process.env.DSH_HUD_ALLOW_TEMP_AUTOSTART = '1';
+  process.env.DSH_HUD_USER_DATA = isolatedUserData;
+  const hudRoot = path.join(env.dir, 'DSH HUD');
+  const exeDir = path.join(hudRoot, 'app');
+  await fsp.mkdir(exeDir, { recursive: true });
+  await fsp.writeFile(path.join(exeDir, 'DSH HUD.exe'), '');
+  if (cookie) {
+    await fsp.mkdir(path.join(hudRoot, 'udd'), { recursive: true });
+    await fsp.writeFile(path.join(hudRoot, 'udd', 'autostart.json'), JSON.stringify(cookie, null, 2) + '\n', 'utf8');
+  }
+  const startupCmd = path.join(roaming, 'Microsoft', 'Windows', 'Start Menu', 'Programs', 'Startup', 'dsh-hud.cmd');
+  try {
+    return await fn({ env, hudRoot, startupCmd });
+  } finally {
+    delete process.env.DSH_HUD_ALLOW_TEMP_AUTOSTART;
+    process.env.APPDATA = prevAppData;
+    if (prevStartMenu === undefined) delete process.env.DSH_HUD_NO_STARTMENU;
+    else process.env.DSH_HUD_NO_STARTMENU = prevStartMenu;
+    if (prevAutoStart === undefined) delete process.env.DSH_HUD_AUTOSTART_WITH_DSH;
+    else process.env.DSH_HUD_AUTOSTART_WITH_DSH = prevAutoStart;
+    if (prevLaunchTask === undefined) delete process.env.DSH_HUD_NO_LAUNCH_TASK;
+    else process.env.DSH_HUD_NO_LAUNCH_TASK = prevLaunchTask;
+    if (prevUserData === undefined) delete process.env.DSH_HUD_USER_DATA;
+    else process.env.DSH_HUD_USER_DATA = prevUserData;
+    await fsp.rm(roaming, { recursive: true, force: true });
+    await fsp.rm(isolatedUserData, { recursive: true, force: true });
+    await env.cleanup();
+  }
+}
+
+test('P-07: first run on a packaged install installs the logon entry and remembers it', async () => {
+  await withPackagedHud(async ({ hudRoot, startupCmd }) => {
+    const h = makeContext();
+    const dispose = plugin.apply(h.ctx, { refreshMs: 10_000 });
+    try {
+      const body = await waitFor(async () => {
+        try { return await fsp.readFile(startupCmd, 'utf8'); } catch { return null; }
+      }, { label: 'Startup dsh-hud.cmd' });
+      assert.ok(body.includes('app\\DSH HUD.exe') || body.includes('app/DSH HUD.exe'), body);
+      assert.ok(body.includes('--user-data-dir='), body);
+
+      const cookie = await waitFor(async () => {
+        try { return await readJson(path.join(hudRoot, 'udd', 'autostart.json')); } catch { return null; }
+      }, { label: 'autostart.json cookie' });
+      assert.equal(cookie.enabled, true);
+      assert.equal(cookie.by, 'plugin-first-run');
+      assert.ok(Date.parse(cookie.at) > 0);
+    } finally {
+      dispose();
+    }
+  });
+});
+
+test('P-07: an explicit off is not overridden on later applies', async () => {
+  await withPackagedHud(async ({ hudRoot, startupCmd }) => {
+    const h = makeContext();
+    const dispose = plugin.apply(h.ctx, { refreshMs: 10_000 });
+    try {
+      // Give the startup IIFE enough time to reconcile (it runs after the first
+      // discovery write); a "removal" pass is a no-op here, so only absence of
+      // the Startup file matters.
+      await sleep(400);
+      assert.equal(fs.existsSync(startupCmd), false, 'must not install while the cookie says off');
+
+      const cookie = await readJson(path.join(hudRoot, 'udd', 'autostart.json'));
+      assert.equal(cookie.enabled, false);
+      assert.equal(cookie.by, 'user');
+    } finally {
+      dispose();
+    }
+  }, { cookie: { enabled: false, by: 'user' } });
+});
+
+
+// --- P-08: Start-menu shortcut (decision logic) ---------------------------
+
+test('P-08: an existing Start-menu shortcut is never overwritten', async () => {
+  await withPackagedHud(async ({ hudRoot }) => {
+    const link = path.join(
+      hudRoot,
+      'Start Menu',
+      'Programs',
+      'DSH HUD.lnk',
+    );
+    // withPackagedHud points APPDATA at its temp roaming dir, so the plugin
+    // computes exactly this path.
+    const realLink = path.join(
+      process.env.APPDATA,
+      'Microsoft',
+      'Windows',
+      'Start Menu',
+      'Programs',
+      'DSH HUD.lnk',
+    );
+    await fsp.mkdir(path.dirname(realLink), { recursive: true });
+    await fsp.writeFile(realLink, 'already here', 'utf8');
+    const h = makeContext();
+    const dispose = plugin.apply(h.ctx, { refreshMs: 10_000 });
+    try {
+      await sleep(300);
+      assert.equal(fs.readFileSync(realLink, 'utf8'), 'already here');
+    } finally {
+      dispose();
+    }
+  });
+});
+
+test('P-08: DSH_HUD_NO_STARTMENU=1 keeps the Start menu untouched', async () => {
+  await withPackagedHud(async () => {
+    const realLink = path.join(
+      process.env.APPDATA,
+      'Microsoft',
+      'Windows',
+      'Start Menu',
+      'Programs',
+      'DSH HUD.lnk',
+    );
+    const h = makeContext();
+    const dispose = plugin.apply(h.ctx, { refreshMs: 10_000 });
+    try {
+      await sleep(300);
+      assert.equal(fs.existsSync(realLink), false);
+    } finally {
+      dispose();
+    }
+  });
+});
+
+test('P-15: a duplicate apply() in the same process skips the setup', async () => {
+  const prevDiag = process.env.DSH_HUD_DIAG_FILE;
+  const diag = path.join(os.tmpdir(), `dsh-hud-diag-${process.pid}-${Date.now()}.log`);
+  process.env.DSH_HUD_DIAG_FILE = diag;
+  try {
+    await withPackagedHud(async () => {
+      const h = makeContext();
+      const dispose1 = plugin.apply(h.ctx, { refreshMs: 10_000 });
+      const dispose2 = plugin.apply(h.ctx, { refreshMs: 10_000 });
+      try {
+        assert.equal(typeof dispose2, 'function');
+        const body = await waitFor(async () => {
+          try {
+            const text = await fsp.readFile(diag, 'utf8');
+            return text.includes('apply skipped (duplicate)') ? text : null;
+          } catch {
+            return null;
+          }
+        }, { label: 'duplicate apply log' });
+        // One apply pid + one icacls pass: the duplicate returned before setup.
+        assert.equal((body.match(/apply pid=/g) || []).length, 1, body);
+        assert.equal((body.match(/ipc dir ready/g) || []).length, 1, body);
+      } finally {
+        dispose2();
+        dispose1();
+      }
+    });
+  } finally {
+    if (prevDiag === undefined) delete process.env.DSH_HUD_DIAG_FILE;
+    else process.env.DSH_HUD_DIAG_FILE = prevDiag;
   }
 });

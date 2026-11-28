@@ -1,2 +1,4 @@
+minimumReleaseAgeExclude:
+  - dsh-hud-capsule@0.5.0
 onlyBuiltDependencies:
   - electron

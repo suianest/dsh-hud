@@ -235,7 +235,7 @@ rem PowerShell 等价：Get-FileHash -Algorithm SHA256 .\electron-v44.7.0-win32-
 
 发布把仓库分成「应用便携包 + 插件 bundle」两块：
 
-- **插件 bundle**：仓库根 `package.json`（`dsh-hud@0.3.0`，`private:false`，`files: ["plugin/**","docs/**","README.md"]`，`dsh.bundle.patch: "./plugin/cordis.patch.yml"`）可直接作为插件安装。
+- **插件 bundle**：仓库根 `package.json`（`dsh-hud@0.4.0`，`private:false`，`files: ["plugin/**","docs/**","README.md"]`，`dsh.bundle.patch: "./plugin/cordis.patch.yml"`）可直接作为插件安装。
 
   ```bash
   plugin_manager install_bundle https://github.com/<owner>/dsh-hud

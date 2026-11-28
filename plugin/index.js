@@ -4,15 +4,17 @@
  * On activation it:
  *   1. publishes the authenticated DSH Web URL (with a fresh `?token=`) to
  *      `%LOCALAPPDATA%\dsh-hud\discovery.json` (t2);
- *   2. can OPTIONALLY start the Electron HUD app, through one of two opt-in
- *      paths (both default OFF — see `cfg` for the reasoning):
- *        - `spawnApp`: node.exe launcher as a direct subprocess (crashes inside
- *          this host: crashpad_client_win.cc:867, exit 0xFFFF7003);
- *        - `shellLaunch`: ask Explorer to run a generated .cmd (works only after
- *          a human clicks the Windows approval prompt).
- *      Default behaviour: the HUD comes up from the login Startup entry (written
- *      by the `autostart` IPC action) or a manual double-click / tray menu,
- *      and this plugin just keeps discovery.json fresh + serves /dsh-hud.
+ *   2. brings the Electron HUD app up when needed. There are three paths:
+ *        - `autoStartWithDsh` (DEFAULT ON): a Windows scheduled task
+ *          (`dsh-hud-launch`) created via PowerShell, which runs outside this
+ *          process tree with a normal token, so no UAC prompt appears;
+ *        - login Startup entry (written by the first-run `autostart` install);
+ *        - two opt-in low-level paths, both default OFF: `spawnApp` (node.exe
+ *          launcher as a direct subprocess — crashes inside this host:
+ *          crashpad_client_win.cc:867, exit 0xFFFF7003) and `shellLaunch`
+ *          (ask Explorer to run a generated .cmd — needs a human click).
+ *      `/dsh-hud on|off|status` start/stop/report the capsule; `toggle|show|
+ *      hide|reload` drive an already-running one.
  *      NOTE: this host process is Medium integrity (it can write
  *      %LOCALAPPDATA%), unlike the Low-IL shells the agent tools run in. That
  *      is what makes the `ipc/request.json` desktop-focus bridge work.
@@ -39,9 +41,12 @@
  *   - newline-delimited JSON on the child's stdin (stdio.stdin: 'pipe'):
  *     { "type": "reload" | "show" | "hide" | "toggle", "seq": N }
  */
-import { mkdir, writeFile, rename, rm, readdir, stat } from 'node:fs/promises';
-import { appendFileSync, existsSync, readFileSync, renameSync, statSync } from 'node:fs';
-import { spawn } from 'node:child_process';
+import { mkdir, writeFile, rename, rm, readdir, readFile, stat } from 'node:fs/promises';
+import { appendFileSync, createReadStream, createWriteStream, existsSync, mkdirSync, readFileSync, renameSync, statSync, unlinkSync } from 'node:fs';
+import { createHash } from 'node:crypto';
+import { Readable } from 'node:stream';
+import { pipeline } from 'node:stream/promises';
+import { spawn, spawnSync } from 'node:child_process';
 import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -77,6 +82,10 @@ const LOCAL_CONFIG_FILE = path.join(REPO_ROOT, 'config.local.json');
 // auto-detect) and sends it with the request; when nothing is known this stays
 // empty and the request degrades to "focus the window by title only".
 const DEFAULT_DSH_EXE = '';
+// P-15-1: keyed by (pid, state dir, HUD dir) so a duplicate apply() in the same
+// process is skipped, while tests that mount several isolated instances still run.
+const APPLIED_KEYS = new Set();
+
 const DEFAULT_REFRESH_MS = 15_000;
 const DEFAULT_RESPAWN_DELAY_MS = 3_000;
 const DEFAULT_MAX_RESPAWNS = 5;
@@ -84,6 +93,23 @@ const DEFAULT_MAX_RESPAWNS = 5;
 // persistent crash loop still trips maxRespawns (t8 D1) but a rare crash does
 // not permanently disable auto-restart.
 const STABLE_MS = 30_000;
+
+// P-13: an unsigned exe that a background process launches can be frozen by
+// Chinese AV suites (悟空/360/火绒/Defender) with no error at all — the user
+// just sees "nothing happened". Whenever a launch fails or the child dies
+// right away, say this instead of failing silently.
+// P-14(A): the plugin never replaces its own files. DSH loads plugin code once
+// per process (a self-update would still need a DSH restart), and pnpm owns
+// node_modules (it would restore the tree on the next install). So the plugin
+// only *notices* a newer npm release and hands the hint to the HUD.
+const NPM_LATEST_URL = 'https://registry.npmjs.org/dsh-hud-capsule/latest';
+const PLUGIN_UPDATE_CHECK_MS = 6 * 60 * 60 * 1000;
+const PLUGIN_UPDATE_TIMEOUT_MS = 10_000;
+
+const LAUNCH_BLOCKED_HINT =
+  'DSH HUD 没有起来时，多半是被安全软件（悟空/360/火绒/Windows Defender）拦截了：' +
+  '把 DSH HUD.exe 加进信任/白名单，或手动双击安装目录里的 DSH HUD.lnk 启动一次；' +
+  '详见 README 的「安全软件拦截」一节';
 
 function hudDir() {
   const base = process.env.LOCALAPPDATA;
@@ -97,6 +123,37 @@ function discoveryFile() {
 
 function controlFile() {
   return path.join(hudDir(), 'control.json');
+}
+
+function pluginUpdateFile() {
+  return path.join(hudDir(), 'plugin-update.json');
+}
+
+// This bundle's own version: <repo>/plugin/index.js → <repo>/package.json.
+function pluginVersion() {
+  try {
+    const pkg = JSON.parse(readFileSync(path.join(REPO_ROOT, 'package.json'), 'utf8'));
+    return typeof pkg.version === 'string' ? pkg.version : null;
+  } catch {
+    return null;
+  }
+}
+
+function versionParts(v) {
+  return String(v || '')
+    .split('.')
+    .map((n) => parseInt(n, 10) || 0);
+}
+
+function isNewerVersion(a, b) {
+  const x = versionParts(a);
+  const y = versionParts(b);
+  for (let i = 0; i < Math.max(x.length, y.length); i++) {
+    const da = x[i] || 0;
+    const db = y[i] || 0;
+    if (da !== db) return da > db;
+  }
+  return false;
 }
 
 function portOf(urlString) {
@@ -141,6 +198,16 @@ function readLocalConfig() {
 // the separate DSH desktop app, instead of assuming this repo is present. Both
 // resolvers are pure (every path injectable) so they can be unit-tested and
 // printed with `node -e` without mounting a full Cordis host.
+// P-06: the packaged exe now lives in <root>/app/DSH HUD.exe (new layout); the
+// old layout had it flat at <root>/DSH HUD.exe. The portable root (where the
+// launcher and the writable udd/ live) is the parent of the app/ subdir in the
+// new layout, and the exe's own dir in the old one.
+function portableRootOf(exePath) {
+  const dir = path.dirname(exePath);
+  if (path.basename(dir).toLowerCase() === 'app') return path.dirname(dir);
+  return dir;
+}
+
 export function resolveHud(opts = {}) {
   const localAppData = opts.localAppData ?? process.env.LOCALAPPDATA ?? '';
   const repoRoot = opts.repoRoot ?? REPO_ROOT;
@@ -149,23 +216,29 @@ export function resolveHud(opts = {}) {
 
   if (exePath) {
     return existsSync(exePath)
-      ? { found: true, mode: 'exe', exe: exePath, dir: path.dirname(exePath) }
+      ? { found: true, mode: 'exe', exe: exePath, dir: path.dirname(exePath), root: portableRootOf(exePath) }
       : { found: false, mode: 'exe', reason: '未找到 HUD：exePath 指向的 exe 不存在（' + exePath + '）' };
   }
   if (hudDir) {
-    const exe = path.join(hudDir, 'DSH HUD.exe');
-    return existsSync(exe)
-      ? { found: true, mode: 'exe', exe, dir: hudDir }
-      : { found: false, mode: 'dir', reason: '未找到 HUD：hudDir 目录下没有 DSH HUD.exe（' + hudDir + '）' };
+    // P-06: new layout (<root>/app/DSH HUD.exe) first, then the old flat one.
+    const newExe = path.join(hudDir, 'app', 'DSH HUD.exe');
+    const oldExe = path.join(hudDir, 'DSH HUD.exe');
+    if (existsSync(newExe)) return { found: true, mode: 'exe', exe: newExe, dir: path.dirname(newExe), root: hudDir };
+    if (existsSync(oldExe)) return { found: true, mode: 'exe', exe: oldExe, dir: path.dirname(oldExe), root: hudDir };
+    return { found: false, mode: 'dir', reason: '未找到 HUD：hudDir 目录下没有 DSH HUD.exe（' + hudDir + '）' };
   }
 
   const candidates = [
+    // P-06: new layout (<root>/app/DSH HUD.exe) first, then the old flat one.
+    localAppData ? path.join(localAppData, 'DSH HUD', 'app', 'DSH HUD.exe') : '',
+    localAppData ? path.join(localAppData, 'Programs', 'DSH HUD', 'app', 'DSH HUD.exe') : '',
+    path.join(repoRoot, 'dist', 'win-unpacked', 'app', 'DSH HUD.exe'),
     localAppData ? path.join(localAppData, 'DSH HUD', 'DSH HUD.exe') : '',
     localAppData ? path.join(localAppData, 'Programs', 'DSH HUD', 'DSH HUD.exe') : '',
     path.join(repoRoot, 'dist', 'win-unpacked', 'DSH HUD.exe'),
   ];
   for (const exe of candidates) {
-    if (exe && existsSync(exe)) return { found: true, mode: 'exe', exe, dir: path.dirname(exe) };
+    if (exe && existsSync(exe)) return { found: true, mode: 'exe', exe, dir: path.dirname(exe), root: portableRootOf(exe) };
   }
 
   const devElectron = opts.devElectron ?? DEFAULT_ELECTRON;
@@ -180,6 +253,109 @@ export function resolveHud(opts = {}) {
     mode: 'missing',
     reason: '未找到 HUD，请下载 Release 包解压后设置 hudDir 或 DSH_HUD_DIR',
   };
+}
+
+// --- first-run app install (npm one-click) --------------------------------
+// Installed from npm, the package only carries the plugin: the ~150 MB desktop
+// app lives in a GitHub Release. On first activation — and only when no HUD is
+// resolvable — download that zip, verify its sha256, and extract it into
+// %LOCALAPPDATA%\\DSH HUD, so "install by package name" really is one click.
+const RELEASE_API = 'https://api.github.com/repos/suianest/dsh-hud/releases/latest';
+const AUTO_INSTALL_DIR = () => path.join(process.env.LOCALAPPDATA || os.tmpdir(), 'DSH HUD');
+
+// GitHub is unreliable behind the GFW, and a 150 MB body can stall forever, so
+// every request gets a hard timeout and the download walks a mirror list
+// (same proxies the standalone installer uses). Measured 2026-11-16: direct
+// github.com ~15 KB/s with resets; ghproxy.net / gh-proxy.com ~110 KB/s; the
+// ghfast.top proxy the installer used first was unreachable. — t40 P-04
+const RELEASE_TIMEOUT_MS = 30_000;
+const DOWNLOAD_TIMEOUT_MS = 600_000;
+const MIRROR_PREFIXES = ['https://ghproxy.net/', 'https://gh-proxy.com/', 'https://ghfast.top/'];
+
+async function fetchWithTimeout(url, ms, init = {}) {
+  const res = await fetch(url, {
+    redirect: 'follow',
+    ...init,
+    signal: AbortSignal.timeout(ms),
+  });
+  if (!res.ok || !res.body) throw new Error('HTTP ' + res.status + ' for ' + url);
+  return res;
+}
+
+async function downloadTo(url, dest) {
+  const once = async (u) => {
+    const res = await fetchWithTimeout(u, DOWNLOAD_TIMEOUT_MS, {
+      headers: { 'user-agent': 'dsh-hud-plugin' },
+    });
+    await pipeline(Readable.fromWeb(res.body), createWriteStream(dest));
+  };
+  const sources = [url, ...MIRROR_PREFIXES.map((p) => p + url)];
+  let lastErr;
+  for (const src of sources) {
+    try {
+      await once(src);
+      return dest;
+    } catch (err) {
+      lastErr = err;
+      await rm(dest, { force: true }).catch(() => {});
+    }
+  }
+  throw lastErr;
+}
+
+function sha256File(file) {
+  return new Promise((resolve, reject) => {
+    const h = createHash('sha256');
+    createReadStream(file)
+      .on('data', (c) => h.update(c))
+      .on('error', reject)
+      .on('end', () => resolve(h.digest('hex')));
+  });
+}
+
+export async function installHudApp(opts = {}) {
+  if (process.platform !== 'win32') return { ok: false, message: 'only supported on Windows' };
+  const dir = opts.dir || AUTO_INSTALL_DIR();
+  const relRes = await fetchWithTimeout(RELEASE_API, RELEASE_TIMEOUT_MS, {
+    headers: { 'user-agent': 'dsh-hud-plugin' },
+  });
+  const rel = await relRes.json();
+  const asset = (rel.assets || []).find((a) => /^DSH-HUD-.*-win-x64\.zip$/.test(a.name));
+  if (!asset) return { ok: false, message: 'release has no win-x64 zip' };
+  const zip = path.join(os.tmpdir(), 'dsh-hud-' + (asset.id || Date.now()) + '.zip');
+  await downloadTo(asset.browser_download_url, zip);
+  const size = statSync(zip).size;
+  if (asset.size && size !== asset.size) {
+    await rm(zip, { force: true });
+    throw new Error('size mismatch: expected ' + asset.size + ' got ' + size);
+  }
+  const digest = (asset.digest || '').replace(/^sha256:/, '').toLowerCase();
+  if (digest) {
+    const got = await sha256File(zip);
+    if (got !== digest) {
+      await rm(zip, { force: true });
+      throw new Error('sha256 mismatch: expected ' + digest + ' got ' + got);
+    }
+  } else {
+    // Older assets may not carry a digest; size is still enforced above.
+    console.error('[dsh-hud] release asset has no sha256 digest; size check only');
+  }
+  await mkdir(dir, { recursive: true });
+  const q = (v) => "'" + String(v).replace(/'/g, "''") + "'";
+  const ps = 'Expand-Archive -LiteralPath ' + q(zip) + ' -DestinationPath ' + q(dir) + ' -Force';
+  await new Promise((resolve, reject) => {
+    const child = spawn('powershell.exe', ['-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-Command', ps], {
+      stdio: 'ignore',
+      windowsHide: true,
+    });
+    child.on('error', reject);
+    child.on('close', (code) => (code === 0 ? resolve() : reject(new Error('Expand-Archive exit ' + code))));
+  });
+  await rm(zip, { force: true });
+  const exe = path.join(dir, 'app', 'DSH HUD.exe');
+  return existsSync(exe)
+    ? { ok: true, dir, message: 'installed ' + exe }
+    : { ok: false, message: 'extracted but app/DSH HUD.exe is missing in ' + dir };
 }
 
 export function resolveDesktopExe(opts = {}) {
@@ -219,6 +395,29 @@ function ageMsOf(updatedAt) {
   return Number.isNaN(t) ? Infinity : Date.now() - t;
 }
 
+
+/**
+ * Decide what the host should do with one IPC request file.
+ *
+ * Extracted from the poll loop so the two-different-ids ping-pong can be tested
+ * without a live host: a request is only skipped when its own id was already
+ * handled (or when it never had an id), and `at` is accepted as an epoch number
+ * or an ISO string — the previous version compared only numbers, so a string
+ * timestamp skipped the TTL check and replayed its action on every tick.
+ *
+ * @param {{id?: string, at?: number|string}|null|undefined} req
+ * @param {Set<string>} handledIds ids already processed since apply()
+ * @param {number} [now] current epoch ms
+ * @param {number} [ttlMs] how old a request may be and still run
+ * @returns {'skip'|'expired'|'handle'}
+ */
+export function requestVerdict(req, handledIds, now = Date.now(), ttlMs = 120_000) {
+  if (!req || typeof req !== 'object' || !req.id) return 'skip';
+  if (handledIds && handledIds.has(req.id)) return 'skip';
+  const stamp = typeof req.at === 'number' ? req.at : Date.parse(String(req.at ?? ''));
+  if (Number.isFinite(stamp) && now - stamp > ttlMs) return 'expired';
+  return 'handle';
+}
 export function apply(ctx, config = {}) {
   const webApp = ctx.get('webApp');
   const connection = ctx.get('connection');
@@ -256,6 +455,12 @@ export function apply(ctx, config = {}) {
     refreshMs: config.refreshMs ?? DEFAULT_REFRESH_MS,
     respawnDelayMs: config.respawnDelayMs ?? DEFAULT_RESPAWN_DELAY_MS,
     maxRespawns: config.maxRespawns ?? DEFAULT_MAX_RESPAWNS,
+    // "Follow DSH": bring the capsule up when the host starts. Uses the silent
+    // scheduled-task path, so it needs no click and cannot crash the host.
+    // `autostart.json` (the tray menu's on/off) still wins: opting out there
+    // means "do not start it behind my back", so we skip.
+    autoStartWithDsh:
+      config.autoStartWithDsh ?? envBool('DSH_HUD_AUTOSTART_WITH_DSH') ?? localConfig.autoStartWithDsh ?? true,
   };
 
   const dFile = discoveryFile();
@@ -266,6 +471,7 @@ export function apply(ctx, config = {}) {
   const abort = new AbortController();
   let child = null; // SubprocessHandle | null
   let lastOrigin = null;
+  let lastDiscoveryUrl = null;
   let controlSeq = 0;
   let respawnCount = 0;
   let respawnTimer = null;
@@ -306,13 +512,31 @@ export function apply(ctx, config = {}) {
   // --- HUD / DSH desktop location (t36 P-02) ------------------------------
   // Explicit config → env → config.local.json → auto-detect. A miss degrades
   // to a skip + one clear log line (never a throw).
-  const hud = resolveHud({
+  const hudOptions = () => ({
     exePath: config.exePath ?? envStr('DSH_HUD_EXE') ?? localConfig.exePath,
     hudDir: config.hudDir ?? envStr('DSH_HUD_DIR') ?? localConfig.hudDir,
     devElectron: cfg.electronPath,
     devAppDir: cfg.appDir,
     devLauncher: cfg.launcherPath,
   });
+  // Resolved once at apply time, but re-resolved after a first-run auto-install:
+  // otherwise the fresh HUD is invisible to autostart/shortcut/task/auto-start
+  // until DSH is restarted (t40 P-01).
+  let hud = resolveHud(hudOptions());
+  // DSH mounted this plugin entry twice in one process on 2026-11-24 (two
+  // `apply pid=` lines and two autostart writes 4s apart). The first apply's
+  // timers are still live, so the duplicate setup wins nothing and doubles the
+  // side effects. Skip it, keyed so isolated test instances still mount.
+  const applyKey = [process.pid, path.dirname(dFile), hud.dir || hud.appDir || '-', config.hudDir || ''].join('|');
+  if (APPLIED_KEYS.has(applyKey)) {
+    log('apply skipped (duplicate):', applyKey);
+    return () => {};
+  }
+  APPLIED_KEYS.add(applyKey);
+  const refreshHud = () => {
+    hud = resolveHud(hudOptions());
+    return hud;
+  };
   const desktopExe = resolveDesktopExe({
     desktopExe: config.desktopExe ?? config.dshExe ?? envStr('DSH_HUD_DSH_EXE') ?? localConfig.desktopExe ?? localConfig.dshExe,
   });
@@ -360,10 +584,15 @@ export function apply(ctx, config = {}) {
         ? connSvc.authenticatedUrl(baseUrl)
         : baseUrl;
 
-    const port =
+    // P-15-2: discovery.port is documented as a number. portOf() returns the
+    // URL's port as a string, so normalise it once here (null when unknown)
+    // rather than leaking a string into the JSON contract.
+    const rawPort =
       portOf(url) ??
       portOf(baseUrl) ??
       (serverSvc && typeof serverSvc.getOrigin === 'function' ? portOf(serverSvc.getOrigin()) : null);
+    const portNum = rawPort == null || rawPort === '' ? null : Number(rawPort);
+    const port = Number.isFinite(portNum) ? portNum : null;
 
     return {
       pid: process.pid,
@@ -387,11 +616,69 @@ export function apply(ctx, config = {}) {
     const tmp = discoveryTmpName();
     await writeFile(
       tmp,
-      JSON.stringify({ pid: d.pid, port: d.port, url: d.url, updatedAt: d.updatedAt }, null, 2),
+      JSON.stringify(
+        {
+          pid: d.pid,
+          port: d.port,
+          url: d.url,
+          updatedAt: d.updatedAt,
+          protocolVersion: PROTOCOL_VERSION,
+          // Medium IL knows where the desktop app lives; the HUD runs at Low
+          // IL and its own probe (Get-Process | .Path) is blocked there
+          // (2026-11-23 "打开 DSH 桌面窗口" bug).
+          dshExe: process.execPath,
+        },
+        null,
+        2,
+      ),
       'utf8',
     );
     await renameWithRetry(tmp, dFile);
     return d;
+  };
+
+  // P-14(A): notice a newer npm release and tell the HUD. Never replaces files:
+  // DSH has already loaded this module, and pnpm owns node_modules.
+  const checkPluginUpdate = async ({ force = false } = {}) => {
+    const current = pluginVersion();
+    if (!current) return null;
+    let state = {};
+    try {
+      state = JSON.parse(await readFile(pluginUpdateFile(), 'utf8'));
+    } catch {
+      state = {};
+    }
+    const now = Date.now();
+    const lastAt = state.lastCheckAt ? Date.parse(state.lastCheckAt) : 0;
+    if (!force && lastAt && now - lastAt < PLUGIN_UPDATE_CHECK_MS) return state;
+
+    let latest = null;
+    try {
+      const res = await fetch(NPM_LATEST_URL, { signal: AbortSignal.timeout(PLUGIN_UPDATE_TIMEOUT_MS) });
+      if (res.ok) {
+        const body = await res.json();
+        if (body && typeof body.version === 'string') latest = body.version;
+      }
+    } catch (err) {
+      log('plugin update check failed:', err?.message ?? err);
+    }
+
+    const next = {
+      lastCheckAt: new Date(now).toISOString(),
+      current,
+      latest: latest || state.latest || null,
+    };
+    if (next.latest && isNewerVersion(next.latest, current) && state.notifiedFor !== next.latest) {
+      next.notifiedFor = next.latest;
+      sendControl('plugin-update', { current, latest: next.latest });
+      log(`plugin update available: ${current} -> ${next.latest}`);
+    }
+    try {
+      await writeFile(pluginUpdateFile(), JSON.stringify(next, null, 2), 'utf8');
+    } catch (err) {
+      log('plugin update state write failed:', err?.message ?? err);
+    }
+    return next;
   };
 
   // Remove leftover *.tmp files (from a previous crashed write) in the HUD dir.
@@ -440,7 +727,7 @@ export function apply(ctx, config = {}) {
   };
 
   // --- control notifications ----------------------------------------------
-  const sendControl = (action) => {
+  const sendControl = (action, data) => {
     // The seq must be monotonic ACROSS plugin reloads: the HUD persists its
     // lastSeq and drops anything <= it, so restarting at 1 after a DSH restart
     // would silently swallow the first n commands (t13 #1). Date.now() jumps
@@ -448,6 +735,7 @@ export function apply(ctx, config = {}) {
     controlSeq = Math.max(controlSeq + 1, Date.now());
     const seq = controlSeq;
     const payload = { seq, action, at: new Date().toISOString() };
+    if (data && typeof data === 'object') payload.data = data;
     // Unique tmp name (pid + seq) so concurrent writes never collide on the
     // same temp file and never rename a path another writer already renamed
     // (t8 D2: was a shared control.json.tmp → ENOENT under concurrency).
@@ -465,7 +753,7 @@ export function apply(ctx, config = {}) {
 
     if (child && child.stdin && !child.stdin.destroyed) {
       try {
-        child.stdin.write(`${JSON.stringify({ action, seq })}\n`);
+        child.stdin.write(`${JSON.stringify(data ? { action, seq, data } : { action, seq })}\n`);
       } catch (err) {
         log('control stdin write failed:', err?.message ?? err);
       }
@@ -473,11 +761,31 @@ export function apply(ctx, config = {}) {
     return payload;
   };
 
+  // A HUD that was already running when DSH (re)started still points at the
+  // old origin/token. Ask it to reload so the panel reconnects immediately
+  // instead of waiting for its own 5s recovery poll.
+  const nudgeReload = (delayMs, label) => {
+    const timer = setTimeout(() => {
+      try {
+        sendControl('reload');
+        log('reload nudge sent to HUD (' + label + ')');
+      } catch (err) {
+        log('reload nudge failed:', err?.message ?? err);
+      }
+    }, delayMs);
+    if (typeof timer.unref === 'function') timer.unref();
+    return timer;
+  };
+
   const notifyReloadIfChanged = (d) => {
     if (d.origin && lastOrigin && d.origin !== lastOrigin) {
       sendControl('reload');
     }
+    if (lastDiscoveryUrl && d.url && d.url !== lastDiscoveryUrl) {
+      nudgeReload(600, 'discovery url changed');
+    }
     lastOrigin = d.origin;
+    lastDiscoveryUrl = d.url;
   };
 
   // --- child process management (t7) --------------------------------------
@@ -645,11 +953,13 @@ export function apply(ctx, config = {}) {
       });
     } catch (err) {
       log('spawn failed:', err?.message ?? err);
+      log(LAUNCH_BLOCKED_HINT);
       child = null;
       return;
     }
 
     const handle = child;
+    const spawnedAt = Date.now();
     const pipe = (name) => {
       const stream = handle && handle[name];
       if (!stream || typeof stream.on !== 'function') {
@@ -679,6 +989,10 @@ export function apply(ctx, config = {}) {
         child = null;
         if (disposed) return;
         log('HUD exited:', JSON.stringify(outcome));
+        if (Date.now() - spawnedAt < 5_000 && outcome && outcome.code !== 0) {
+          // Died within 5s: almost always a policy/AV block rather than a crash.
+          log(LAUNCH_BLOCKED_HINT);
+        }
         // Exit 0 means the app quit on purpose: either the user closed it, or we
         // handed off to an already-running instance (single-instance lock). In
         // both cases respawning would fight the user / thrash the lock, so stop.
@@ -718,9 +1032,9 @@ export function apply(ctx, config = {}) {
   if (commands && typeof commands.register === 'function') {
     unregisterCommand = commands.register({
       name: 'dsh-hud',
-      description: '打开或隐藏 DSH 悬浮胶囊（DSH HUD）',
-      input: { hint: 'toggle | show | hide | reload（留空 = toggle）' },
-      handler: ({ rawInput = '' }) => {
+      description: '开关 DSH 悬浮胶囊（DSH HUD）：on 启动 / off 退出 / status 查看',
+      input: { hint: 'on | off | status | toggle | show | hide | reload（留空 = toggle）' },
+      handler: async ({ rawInput = '' }) => {
         if (disposed) return { kind: 'error', text: 'DSH HUD 插件已卸载' };
         // Only manage the child when spawnApp is enabled; under the default the
         // HUD self-starts and this command just writes control.json for it.
@@ -739,10 +1053,45 @@ export function apply(ctx, config = {}) {
             : '且未找到 HUD（请设置 hudDir 或 DSH_HUD_DIR）';
         const note = (okText, failText) => ({
           kind: 'success',
-          text: hudRunning() ? okText : failText,
+          text:
+            (hudRunning() ? okText : failText) +
+            (hudRunning() && firstRunAutostart ? '（首次运行已自动添加开机启动与开始菜单快捷方式，可在右键菜单关闭）' : ''),
         });
         // 扩展点 2：非内置动作原样透传给 control.json，由 app 侧
         // extensions.registerControlAction 注册的 handler 处理。
+        if (action === 'on') {
+          if ((await hudProcessCount()) > 0) {
+            sendControl('show');
+            visible = true;
+            return { kind: 'success', text: 'DSH 浮窗已打开（进程已在运行）' };
+          }
+          const ok = await ensureHudRunning();
+          visible = ok;
+          return ok
+            ? { kind: 'success', text: 'DSH HUD 已启动' }
+            : { kind: 'error', text: '启动失败：没有找到打包版 HUD（详见插件诊断日志）' };
+        }
+        if (action === 'off') {
+          if ((await hudProcessCount()) <= 0) return { kind: 'success', text: 'DSH HUD 未在运行' };
+          sendControl('quit');
+          for (let i = 0; i < 8; i += 1) {
+            await sleep(300);
+            if ((await hudProcessCount()) <= 0) break;
+          }
+          if ((await hudProcessCount()) > 0) {
+            return { kind: 'error', text: '已发送退出指令，但进程仍在（可手动结束 DSH HUD.exe）' };
+          }
+          visible = false;
+          return { kind: 'success', text: 'DSH HUD 已关闭' };
+        }
+        if (action === 'status') {
+          const n = await hudProcessCount();
+          const where = hud.found ? hud.exe : '未找到安装目录';
+          return {
+            kind: n > 0 ? 'success' : 'info',
+            text: (n > 0 ? `运行中（${n} 个进程）` : '未运行') + ' · ' + where,
+          };
+        }
         const builtins = ['show', 'hide', 'reload', 'toggle'];
         if (action && !builtins.includes(action)) {
           sendControl(action);
@@ -793,19 +1142,94 @@ export function apply(ctx, config = {}) {
   // starts, otherwise it can delete the tmp of that very write (t16 B1).
   void (async () => {
     await cleanupTmpFiles();
+
+    // Every step is isolated: one failure must not skip the rest (t40 P-03).
     try {
       const d = await writeDiscovery();
       log('discovery written port=' + d.port + ' origin=' + d.origin);
       notifyReloadIfChanged(d);
-      const wantAutostart = autostartDesired();
-      if (wantAutostart === true) {
-        await applyAutostart(true).catch((err) => log('autostart reconcile failed:', err?.message ?? err));
-      } else if (wantAutostart === false) {
-        await applyAutostart(false).catch(() => {});
-      }
-      if (cfg.spawnApp) ensureRunning();
     } catch (err) {
       log('discovery write failed:', err?.message ?? err);
+    }
+
+    // npm installs carry the plugin only; fetch the app once when it is absent.
+    if (process.platform === 'win32' && process.env.DSH_HUD_NO_AUTO_INSTALL !== '1' && !hud.found) {
+      try {
+        log('HUD not found; auto-installing from the latest release (first run)');
+        const r = await installHudApp();
+        log('auto-install:', r.ok ? r.message : 'failed: ' + r.message);
+        if (r.ok) {
+          refreshHud();
+          log(
+            hud.found
+              ? 'HUD found after auto-install: ' + (hud.exe ?? hud.dir)
+              : 'HUD still missing after auto-install (' + hud.reason + ')',
+          );
+        }
+      } catch (err) {
+        log('auto-install failed:', err?.message ?? err);
+      }
+    }
+
+    try {
+      const wantAutostart = autostartDesired();
+      if (wantAutostart === true) {
+        await applyAutostart(true);
+      } else if (wantAutostart === false) {
+        await applyAutostart(false);
+      } else if (packagedLauncher() && process.env.DSH_HUD_NO_AUTOSTART !== '1') {
+        // P-07: a fresh plugin-only install has no cookie and no shortcut, so
+        // without this the capsule would never appear at logon. Install once,
+        // then record the decision so a later "off" is never overridden.
+        await installFirstRunAutostart();
+      }
+    } catch (err) {
+      log('autostart step failed:', err?.message ?? err);
+    }
+
+    // Only the opt-in task path registers a scheduled task. Default installs
+    // spawn the exe directly, so we never leave behind a task whose action is
+    // an unsigned auto-start target (that is what AV tools flag).
+    if (useTaskOnly()) {
+      try {
+        await ensureLaunchTask();
+      } catch (err) {
+        log('launch task setup failed:', err?.message ?? err);
+      }
+    } else {
+      await removeLegacyLaunchTask();
+    }
+
+    // P-08: the HUD cannot write %APPDATA%\Roaming itself (Low IL), so the
+    // Medium-IL host owns the Start-menu shortcut as well.
+    try {
+      await ensureStartMenuShortcut();
+    } catch (err) {
+      log('start-menu shortcut failed:', err?.message ?? err);
+    }
+
+    try {
+      // Legacy opt-in path first: it starts the dev checkout synchronously.
+      if (cfg.spawnApp) ensureRunning();
+      // "Follow DSH" (packaged installs only): the scheduled task is the one
+      // launcher that neither crashes the host nor needs a click.
+      if (cfg.autoStartWithDsh && !cfg.spawnApp && packagedLauncher()) {
+        if (autostartDesired() === false) {
+          log('auto-start with DSH skipped (user turned autostart off)');
+        } else if ((await hudProcessCount()) > 0) {
+          log('capsule already running; skip auto-start');
+          // The HUD outlived a DSH restart: it still holds the previous
+          // origin/token, so ask it to reconnect instead of waiting for its
+          // own recovery poll.
+          sendControl('reload');
+          nudgeReload(2500, 'HUD was already running');
+        } else {
+          const started = await ensureHudRunning();
+          log(started ? 'auto-started with DSH' : 'auto-start with DSH failed (see log above)');
+        }
+      }
+    } catch (err) {
+      log('start-with-DSH step failed:', err?.message ?? err);
     }
   })();
 
@@ -816,22 +1240,56 @@ export function apply(ctx, config = {}) {
   // Medium, so the HUD posts a request file and the launch + focus happen here.
   const IPC_POLL_MS = 500;
   const DSH_DESKTOP_EXE = desktopExe;
-  let lastRequestId = '';
+  // 多个 IPC 目录里可能各有一个 request.json：只用单一 lastRequestId 去重时，
+  // 两个文件的 id 会互相覆盖，导致「过期日志 + 重放 autostart」每 500ms 循环一次。
+  // 改为按 id 集合去重（有上限），并在处理/丢弃后删除 request.json。
+  const handledRequestIds = new Set();
+  const markHandled = (id) => {
+    if (!id) return;
+    handledRequestIds.add(id);
+    if (handledRequestIds.size > 64) {
+      const first = handledRequestIds.values().next().value;
+      if (first) handledRequestIds.delete(first);
+    }
+  };
   let ipcBusy = false;
   // Two writers exist: a dev checkout (Low IL, can only write inside the repo)
   // and a packaged build (profile may live elsewhere). Poll every candidate so
   // either layout reaches the bridge; DSH_HUD_IPC_DIR still wins outright.
   const ipcDirectories = () => {
     if (process.env.DSH_HUD_IPC_DIR) return [process.env.DSH_HUD_IPC_DIR];
-    const dirs = [path.join(path.dirname(cfg.appDir), 'artifacts', 'ipc')];
+    // Canonical folder first: the app writes here in both dev and packaged
+    // runs (2026-11-23 desktop-focus bug), the legacy paths stay for older
+    // builds that still drop their request next to the install root.
+    const dirs = [];
     if (process.env.LOCALAPPDATA) {
       dirs.push(path.join(process.env.LOCALAPPDATA, 'dsh-hud', 'ipc'));
+    }
+    dirs.push(path.join(path.dirname(cfg.appDir), 'artifacts', 'ipc'));
+    // Packaged installs write next to their own resources directory
+    // (<root>/artifacts/ipc, or <root>/resources/artifacts/ipc when the asar is
+    // under resources/). Without this the desktop-focus request silently times
+    // out on any machine that is not the build machine (t40 P-02).
+    if (hud.found) {
+      // Compatibility: builds up to 0.5.7 derived their ipc dir from the asar
+      // location (<root>/app/resources/app.asar → <root>/app/artifacts/ipc).
+      // Users can update the plugin before the app, so keep polling that path.
+      if (hud.dir) dirs.push(path.join(hud.dir, 'artifacts', 'ipc'));
+      const root = hud.root ?? (hud.dir && path.basename(hud.dir) === 'app' ? path.dirname(hud.dir) : hud.dir);
+      if (root) {
+        dirs.push(path.join(root, 'artifacts', 'ipc'));
+        dirs.push(path.join(root, 'resources', 'artifacts', 'ipc'));
+      }
     }
     return dirs;
   };
   // A request that sat on disk while the host was down is history, not a
   // command; replaying it would e.g. steal focus minutes later.
   const IPC_REQUEST_TTL_MS = 120_000;
+
+// Incremented whenever discovery/control payloads change shape. The HUD compares
+// this against its own expectation and only warns on a mismatch (never blocks).
+const PROTOCOL_VERSION = 1;
 
   // --- autostart (dev builds) ---------------------------------------------
   // The HUD runs at Low IL and cannot write the user's Startup folder, but this
@@ -857,7 +1315,7 @@ export function apply(ctx, config = {}) {
   const packagedLauncher = () => {
     // A packaged Release folder can now come from hudDir/exePath or any of the
     // standard install locations, not just <repo>/dist/win-unpacked (t36 P-02).
-    if (hud.mode === 'exe') return { exe: hud.exe, udd: path.join(hud.dir, 'udd') };
+    if (hud.mode === 'exe') return { exe: hud.exe, udd: path.join(hud.root ?? hud.dir, 'udd') };
     return null;
   };
   const autostartScript = () => {
@@ -879,9 +1337,22 @@ export function apply(ctx, config = {}) {
       '',
     ].join('\r\n');
   };
+  // A temporary exe (test fixture, half-extracted zip) must never become the
+  // logon entry: the file disappears and every login shows "Windows cannot
+  // find ...". Same guard as the scheduled-task path.
+  const isTempPath = (p) => {
+    const t = os.tmpdir().toLowerCase();
+    return String(p || '').toLowerCase().startsWith(t);
+  };
   async function applyAutostart(enabled) {
     const file = startupCmdFile();
     if (enabled) {
+      const target = packagedLauncher();
+      const exe = target ? target.exe : cfg.electronPath;
+      if (isTempPath(exe) && process.env.DSH_HUD_ALLOW_TEMP_AUTOSTART !== '1') {
+        log('autostart skipped: launcher lives in a temp folder', exe);
+        return file;
+      }
       await mkdir(path.dirname(file), { recursive: true });
       await writeFile(file, autostartScript(), 'ascii');
     } else {
@@ -908,6 +1379,258 @@ export function apply(ctx, config = {}) {
     }
     return readAutostartCookie(path.join(hudUserDataDir(), 'autostart.json'));
   };
+
+  // P-07: install the logon entry exactly once for a packaged install, then
+  // leave an explicit cookie next to its user-data so the tray menu wins later.
+  let firstRunAutostart = null;
+  async function installFirstRunAutostart() {
+    const packaged = packagedLauncher();
+    if (!packaged) return null;
+    const file = await applyAutostart(true);
+    const cookie = path.join(packaged.udd, 'autostart.json');
+    await mkdir(packaged.udd, { recursive: true });
+    await writeFile(
+      cookie,
+      JSON.stringify({ enabled: true, by: 'plugin-first-run', at: new Date().toISOString() }, null, 2) + '\n',
+      'utf8',
+    );
+    firstRunAutostart = file;
+    log('autostart first-run installed:', file, 'cookie:', cookie);
+    return file;
+  }
+
+  // P-08: the HUD cannot create this itself. Started from the desktop it runs
+  // at Low Mandatory Level, and saving a .lnk under %APPDATA%\Roaming fails
+  // with E_ACCESSDENIED (0x80070005). This host is Medium, so it does the one
+  // write; the HUD keeps its own attempt as a fallback for Medium launches.
+  const startMenuLink = () =>
+    path.join(process.env.APPDATA || '', 'Microsoft', 'Windows', 'Start Menu', 'Programs', 'DSH HUD.lnk');
+  // Users look for the app on the desktop first, so install both links (P-08).
+  const desktopLink = () => {
+    const home = process.env.USERPROFILE || '';
+    const oneDrive = path.join(home, 'OneDrive', 'Desktop');
+    return {
+      candidates: [path.join(home, 'Desktop', 'DSH HUD.lnk'), path.join(oneDrive, 'DSH HUD.lnk')],
+    };
+  };
+  const psQuote = (s) => String(s).replace(/'/g, "''");
+  const runPowerShell = (command, timeoutMs = 15_000) =>
+    new Promise((resolve) => {
+      let out = '';
+      let done = false;
+      const finish = (code) => {
+        if (done) return;
+        done = true;
+        resolve({ code, out: out.trim() });
+      };
+      try {
+        const child = spawn(
+          'powershell.exe',
+          ['-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-Command', command],
+          { windowsHide: true, stdio: ['ignore', 'pipe', 'pipe'] },
+        );
+        child.stdout.on('data', (b) => { out += b.toString(); });
+        child.stderr.on('data', (b) => { out += b.toString(); });
+        child.on('error', (err) => { out += String(err?.message ?? err); finish(-1); });
+        child.on('close', (code) => finish(code ?? -2));
+        setTimeout(() => { try { child.kill(); } catch { /* ignore */ } finish(-3); }, timeoutMs);
+      } catch (err) {
+        out += String(err?.message ?? err);
+        finish(-4);
+      }
+    });
+  let startMenuLinkInstalled = null;
+  async function ensureStartMenuShortcut() {
+    if (process.env.DSH_HUD_NO_STARTMENU === '1') return null;
+    const packaged = packagedLauncher();
+    if (!packaged) return null;
+    const link = startMenuLink();
+    const links = [link];
+    // Desktop: prefer the folder that already exists (OneDrive-redirected
+    // desktops are common on Windows 11).
+    const desk = desktopLink().candidates.find((p) => existsSync(path.dirname(p)));
+    if (desk) links.push(desk);
+    if (links.every((p) => existsSync(p))) return link;
+    await mkdir(path.dirname(link), { recursive: true });
+    const args = '--no-sandbox --user-data-dir="' + packaged.udd + '"';
+    const ps = [
+      "$ErrorActionPreference = 'Stop';",
+      '$ws = New-Object -ComObject WScript.Shell;',
+      "foreach ($p in @('" + links.map(psQuote).join("','") + "')) {",
+      '  $lnk = $ws.CreateShortcut($p);',
+      "  $lnk.TargetPath = '" + psQuote(packaged.exe) + "';",
+      "  $lnk.Arguments = '" + psQuote(args) + "';",
+      "  $lnk.WorkingDirectory = '" + psQuote(path.dirname(packaged.exe)) + "';",
+      "  $lnk.IconLocation = '" + psQuote(packaged.exe + ',0') + "';",
+      "  $lnk.Description = 'DSH HUD';",
+      '  $lnk.Save();',
+      '}',
+    ].join(' ');
+    const { code, out } = await runPowerShell(ps);
+    if (code === 0) {
+      startMenuLinkInstalled = link;
+      log('start-menu shortcut installed:', link);
+      return link;
+    }
+    log('start-menu shortcut failed:', out || 'exit ' + code);
+    return null;
+  }
+
+  // --- launch task (on/off from DSH) ---------------------------------------
+  // 2026-11-13 the host's direct spawn died at 0x80000003 (Chromium setting up
+  // crashpad/mojo). Re-tested 2026-11-18: the crash came from the child falling
+  // back to the shared %APPDATA%\Electron profile -- with `--no-sandbox` plus a
+  // writable `--user-data-dir` a direct spawn from this host stays up (verified
+  // end-to-end, 5 processes, no 8s exit). Direct spawn is therefore the default
+  // again; the per-user scheduled task is kept only as the opt-in fallback
+  // (`DSH_HUD_USE_TASK=1`), because a task that starts an unsigned exe is what
+  // AV like 悟空 flags. `off` uses the control channel's quit action.
+  const LAUNCH_TASK = 'dsh-hud-launch';
+  let launchTaskReady = false;
+  const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+
+  async function removeLaunchTask() {
+    const ps =
+      "$ErrorActionPreference = 'SilentlyContinue';" +
+      " if (Get-ScheduledTask -TaskName '" + LAUNCH_TASK + "' -ErrorAction SilentlyContinue)" +
+      " { Unregister-ScheduledTask -TaskName '" + LAUNCH_TASK + "' -Confirm:$false }";
+    await runPowerShell(ps, 15_000).catch(() => {});
+    launchTaskReady = false;
+    log('launch task removed (no valid HUD exe)');
+  }
+
+  async function ensureLaunchTask() {
+    if (process.env.DSH_HUD_NO_LAUNCH_TASK === '1') return false;
+    const packaged = packagedLauncher();
+    if (!packaged) return false;
+    // A task whose action points at a missing exe makes Windows pop
+    // "找不到文件" on every logon. Tests used to resolve a throwaway exe under
+    // %TEMP% and leave that task behind, so refuse anything that is not a real
+    // installed binary (and never a temp path) and clean the stale task up.
+    const tmp = path.resolve(os.tmpdir()).toLowerCase();
+    if (!existsSync(packaged.exe) || path.resolve(packaged.exe).toLowerCase().startsWith(tmp)) {
+      await removeLaunchTask();
+      return false;
+    }
+    const ps = [
+      "$ErrorActionPreference = 'Stop';",
+      'try {',
+      "$a = New-ScheduledTaskAction -Execute '" + psQuote(packaged.exe) + "'",
+      "  -Argument '--no-sandbox --user-data-dir=\"" + psQuote(packaged.udd) + "\"'",
+      "  -WorkingDirectory '" + psQuote(path.dirname(packaged.exe)) + "';",
+      '$t = New-ScheduledTaskTrigger -Once -At (Get-Date).AddYears(1);',
+      "Register-ScheduledTask -TaskName '" + LAUNCH_TASK + "' -Action $a -Trigger $t -Force | Out-Null;",
+      "'ok'",
+      "} catch { [Console]::Error.WriteLine($_.Exception.Message); exit 1 }",
+    ].join(' ');
+    const { code, out } = await runPowerShell(ps, 20_000);
+    launchTaskReady = code === 0;
+    log(launchTaskReady ? 'launch task ready: ' + LAUNCH_TASK : 'launch task failed: ' + (out || 'exit ' + code));
+    return launchTaskReady;
+  }
+
+  const useTaskOnly = () => process.env.DSH_HUD_USE_TASK === '1';
+
+  /**
+   * Start the packaged HUD as a detached child of this host process.
+   *
+   * The child must get `--no-sandbox` and a writable `--user-data-dir`: without
+   * them Chromium picks the shared `%APPDATA%\Electron` profile and aborts with
+   * 0x80000003 before any of our JS runs. `detached` + `unref` keeps it alive
+   * when DSH exits; `stdio: 'ignore'` keeps the pipes out of our process tree.
+   */
+  async function startHudDirect() {
+    const packaged = packagedLauncher();
+    if (!packaged) {
+      log('direct launch skipped: no packaged launcher resolved');
+      return false;
+    }
+    // Never let the child inherit ELECTRON_RUN_AS_NODE: some DSH shells set it,
+    // and an Electron binary started with it runs as plain Node (no window).
+    const childEnv = { ...process.env };
+    delete childEnv.ELECTRON_RUN_AS_NODE;
+    try {
+      const child = spawn(packaged.exe, ['--no-sandbox', '--user-data-dir=' + packaged.udd], {
+        cwd: path.dirname(packaged.exe),
+        detached: true,
+        stdio: 'ignore',
+        windowsHide: true,
+        env: childEnv,
+      });
+      child.on('error', (err) => log('direct launch error:', err?.message ?? err));
+      child.unref();
+      log('direct launch requested: ' + path.basename(packaged.exe) + ' pid=' + child.pid);
+    } catch (err) {
+      log('direct launch failed:', err?.message ?? err);
+      return false;
+    }
+    for (let i = 0; i < 10; i += 1) {
+      await sleep(600);
+      if ((await hudProcessCount()) > 0) {
+        log('direct launch confirmed: DSH HUD is running');
+        nudgeReload(4000, 'direct launch');
+        return true;
+      }
+    }
+    log('direct launch: no DSH HUD process appeared within 6s');
+    return false;
+  }
+
+  /** Default launcher: direct spawn first, scheduled task only as fallback. */
+  async function ensureHudRunning() {
+    if ((await hudProcessCount()) > 0) return true;
+    if (!useTaskOnly()) {
+      if (await startHudDirect()) return true;
+      log('direct launch did not work; falling back to the scheduled task');
+    }
+    return startHudViaTask().catch(() => false);
+  }
+
+  /**
+   * 0.5.4 and older always registered `dsh-hud-launch`. Now that the default is
+   * a direct spawn, a leftover task is pure downside: a scheduled task pointing
+   * at an unsigned exe is exactly what AV vendors flag. Drop it when we are not
+   * in task mode (the fallback recreates it on demand).
+   */
+  async function removeLegacyLaunchTask() {
+    if (useTaskOnly()) return;
+    if (process.env.DSH_HUD_NO_LAUNCH_TASK === '1') return;
+    try {
+      const ps =
+        "$ErrorActionPreference = 'SilentlyContinue';" +
+        " if (Get-ScheduledTask -TaskName '" + LAUNCH_TASK + "' -ErrorAction SilentlyContinue)" +
+        " { Unregister-ScheduledTask -TaskName '" + LAUNCH_TASK + "' -Confirm:$false; 'removed' } else { 'absent' }";
+      const { out } = await runPowerShell(ps, 15_000);
+      if (out.trim() === 'removed') log('legacy launch task removed (direct launch is the default now)');
+    } catch (err) {
+      log('legacy launch task cleanup failed:', err?.message ?? err);
+    }
+  }
+
+  async function hudProcessCount() {
+    const { code, out } = await runPowerShell(
+      "(Get-Process -Name 'DSH HUD' -ErrorAction SilentlyContinue | Measure-Object).Count",
+    );
+    if (code !== 0) return -1;
+    const n = Number.parseInt(out.trim(), 10);
+    return Number.isFinite(n) ? n : -1;
+  }
+
+  async function startHudViaTask() {
+    if (!launchTaskReady && !(await ensureLaunchTask())) return false;
+    const { code } = await runPowerShell("Start-ScheduledTask -TaskName '" + LAUNCH_TASK + "'; 'ok'", 20_000);
+    if (code !== 0) return false;
+    for (let i = 0; i < 10; i += 1) {
+      await sleep(600);
+      if ((await hudProcessCount()) > 0) {
+        nudgeReload(4000, 'scheduled task launch');
+        return true;
+      }
+    }
+    log('launch task ran but no DSH HUD process appeared');
+    log(LAUNCH_BLOCKED_HINT);
+    return false;
+  }
 
   async function runFocusHelper() {
     const script = path.join(cfg.appDir, 'scripts', 'focus-dsh.ps1');
@@ -955,6 +1678,27 @@ export function apply(ctx, config = {}) {
     return { ok: code === 0, out: out || 'exit ' + code };
   }
 
+  // The HUD runs at Low IL; a folder created here (Medium IL) carries a Medium
+  // mandatory label, so the HUD's mkdir/write inside it fails with EPERM
+  // (2026-11-23 "打开 DSH 桌面窗口" bug). Create the canonical folder ourselves
+  // and drop its integrity label to Low so both sides can use it.
+  const ensureIpcDirectory = () => {
+    const la = process.env.LOCALAPPDATA;
+    if (process.platform !== 'win32' || !la) return;
+    const dir = path.join(la, 'dsh-hud', 'ipc');
+    try {
+      mkdirSync(dir, { recursive: true });
+      const r = spawnSync('icacls', [dir, '/setintegritylevel', '(OI)(CI)Low'], {
+        encoding: 'utf8',
+        windowsHide: true,
+      });
+      log('ipc dir ready:', dir, 'icacls=' + (r.status ?? 'n/a'));
+    } catch (err) {
+      log('ipc dir setup failed:', err?.message ?? err);
+    }
+  };
+  ensureIpcDirectory();
+
   const ipcTimer = setInterval(() => {
     if (disposed || ipcBusy) return;
     for (const dir of ipcDirectories()) {
@@ -962,13 +1706,15 @@ export function apply(ctx, config = {}) {
       try { raw = readFileSync(path.join(dir, 'request.json'), 'utf8'); } catch { continue; }
       let req;
       try { req = JSON.parse(raw); } catch { continue; }
-      if (!req || !req.id || req.id === lastRequestId) continue;
-      if (typeof req.at === 'number' && Date.now() - req.at > IPC_REQUEST_TTL_MS) {
-        lastRequestId = req.id;
-        log('ipc request expired, ignored:', req.action, req.id);
+      const verdict = requestVerdict(req, handledRequestIds, Date.now(), IPC_REQUEST_TTL_MS);
+      if (verdict === 'skip') continue;
+      if (verdict === 'expired') {
+        markHandled(req.id);
+        log('ipc request expired, dropped:', req.action, req.id);
+        try { unlinkSync(path.join(dir, 'request.json')); } catch { /* best effort */ }
         continue;
       }
-      lastRequestId = req.id;
+      markHandled(req.id);
       ipcBusy = true;
       const task = req.action === 'autostart'
         ? applyAutostart(Boolean(req.enabled)).then((file) => ({ ok: true, out: 'autostart ' + (req.enabled ? 'on' : 'off') + ' ' + file }))
@@ -980,12 +1726,26 @@ export function apply(ctx, config = {}) {
           await mkdir(dir, { recursive: true });
           await writeFile(tmp, JSON.stringify({ id: req.id, ok: res.ok, out: res.out, at: Date.now() }, null, 2));
           await rename(tmp, file);
+          try { unlinkSync(path.join(dir, 'request.json')); } catch { /* best effort */ }
         })
         .catch((err) => log('ipc handle failed:', err?.message ?? err))
         .finally(() => { ipcBusy = false; });
       return; // one request per tick
     }
   }, IPC_POLL_MS);
+
+  let updateTimer = null;
+  let updateKickTimer = null;
+  if (process.env.DSH_HUD_NO_PLUGIN_UPDATE !== '1') {
+    const kick = () => {
+      if (disposed) return;
+      void checkPluginUpdate().catch((err) => log('plugin update check failed:', err?.message ?? err));
+    };
+    updateKickTimer = setTimeout(kick, 10_000);
+    updateTimer = setInterval(kick, PLUGIN_UPDATE_CHECK_MS);
+    if (updateTimer.unref) updateTimer.unref();
+    if (updateKickTimer.unref) updateKickTimer.unref();
+  }
 
   const timer = setInterval(() => {
     if (disposed) return;
@@ -997,8 +1757,11 @@ export function apply(ctx, config = {}) {
   // --- dispose -------------------------------------------------------------
   return () => {
     disposed = true;
+    APPLIED_KEYS.delete(applyKey);
     clearInterval(timer);
     clearInterval(ipcTimer);
+    if (updateTimer) clearInterval(updateTimer);
+    if (updateKickTimer) clearTimeout(updateKickTimer);
     if (respawnTimer) clearTimeout(respawnTimer);
     clearStable();
     abort.abort();

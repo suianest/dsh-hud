@@ -448,13 +448,29 @@ test('context menu template exposes the 2 primary actions plus the autostart gro
   const tpl = hud.buildContextMenu();
   const labels = tpl.filter((i) => i.type !== 'separator').map((i) => i.label);
   // 「关闭 DSH 浮窗」在 t20 移除：胶囊与面板是点击联动的，面板右上角已有 ×。
-  assert.deepEqual(labels, ['打开 DSH 桌面窗口', '打开 DSH 浮窗', 'Token 补充', '退出 DSH 浮窗', '开机自启']);
+  assert.deepEqual(labels, ['打开 DSH 桌面窗口', '打开 DSH 浮窗', 'Token 补充', '检查更新', '退出 DSH 浮窗', '开机自启']);
 
   const autostart = tpl.find((i) => i.label === '开机自启');
   assert.equal(autostart.type, 'checkbox');
   if (savedStartup === undefined) delete process.env.DSH_HUD_STARTUP_CMD;
   else process.env.DSH_HUD_STARTUP_CMD = savedStartup;
   assert.equal(autostart.checked, false, 'autostart off by default (no login item)');
+});
+
+test('palette toggles closed and tells the renderer to hide it (2026-11-13)', () => {
+  const ctx = setup({ discovery: freshDiscovery() });
+  const { hud, win } = boot(ctx);
+  hud.showPanel();
+
+  hud._openPalette();
+  assert.equal(hud._paletteOpen, true);
+  const sent = win.webContents.sent || [];
+  assert.ok(sent.some((m) => m.channel === 'hud:palette-open'), 'renderer got the open payload');
+
+  // Second ⌘ / Ctrl+K press must close it again, both in main and in the DOM.
+  hud._togglePalette();
+  assert.equal(hud._paletteOpen, false);
+  assert.ok(sent.some((m) => m.channel === 'hud:palette-close'), 'renderer asked to hide the palette');
 });
 
 test('right sidebar opens outward: panel widens to 1040 DIP and keeps the left edge (2026-11-08)', () => {
@@ -768,4 +784,104 @@ test('the palette shortcut toggles: pressing it again closes the palette (2026-1
   ctx.mock.ipcMain.emit('hud:palette-open-request', {});
   assert.equal(hud._paletteOpen, false, 'toolbar button toggles closed');
   hud.destroy();
+});
+
+// ---------------------------------------------------------------------------
+// Anti-flash: the window is resized before the renderer repaints, so a mode
+// switch must hold the window invisible until the new frame is on screen.
+// ---------------------------------------------------------------------------
+test('expanding from capsule holds opacity until the renderer paints (2026-11-16)', () => {
+  const ctx = setup({ discovery: freshDiscovery() });
+  const { hud, win } = boot(ctx);
+
+  hud.showCapsule();
+  win.opacity = 1;
+  win.opacityCalls.length = 0;
+
+  hud.showPanel();
+  assert.equal(hud.mode, 'panel');
+  assert.equal(win.opacity, 0, 'window must stay hidden while the old layout is on screen');
+
+  ctx.mock.ipcMain.emit('hud:painted', {});
+  assert.equal(win.opacity, 1, 'paint ack reveals the window');
+});
+
+test('the reveal falls back to a timer if the paint ack never arrives', async () => {
+  const ctx = setup({ discovery: freshDiscovery() });
+  const { hud, win } = boot(ctx);
+
+  hud.showCapsule();
+  hud.showPanel();
+  assert.equal(win.opacity, 0);
+
+  await delay(220);
+  assert.equal(win.opacity, 1, 'fallback timer must never leave the window invisible');
+});
+
+test('a host plugin update surfaces as state + a palette entry, and copies the guide (P-14 A)', () => {
+  const ctx = setup({ discovery: freshDiscovery() });
+  const { hud, win } = boot(ctx);
+
+  hud.showPanel();
+  hud.setPluginUpdate({ current: '0.5.5', latest: '0.5.6' });
+
+  const stateMsgs = win.webContents.sent.filter((m) => m.channel === 'hud:state');
+  const last = stateMsgs[stateMsgs.length - 1];
+  assert.deepEqual(
+    last && last.payload && last.payload.pluginUpdate,
+    { current: '0.5.5', latest: '0.5.6' },
+    'state carries the pending update so the renderer can badge the button'
+  );
+
+  hud._openPalette();
+  const openMsg = win.webContents.sent.filter((m) => m.channel === 'hud:palette-open').pop();
+  const items = (openMsg && openMsg.payload && openMsg.payload.items) || [];
+  const updateItem = items.find((it) => it.id === 'plugin-update');
+  assert.ok(updateItem, 'palette gets a plugin-update entry');
+  assert.match(updateItem.label, /v0\.5\.6/, 'the entry names the newer version');
+
+  ctx.mock.ipcMain.emit('hud:palette-exec', {}, { id: 'plugin-update' });
+  assert.deepEqual(
+    ctx.mock._clipboardText,
+    ['pnpm add dsh-hud-capsule@0.5.6'],
+    'the upgrade command lands on the clipboard'
+  );
+  assert.equal(hud._paletteOpen, false, 'running the entry closes the palette');
+});
+
+test('a plugin update only appears when the host reports one (no empty entry)', () => {
+  const ctx = setup({ discovery: freshDiscovery() });
+  const { hud, win } = boot(ctx);
+  hud.showPanel();
+
+  hud.setPluginUpdate({ latest: '' });
+  hud._openPalette();
+  const openMsg = win.webContents.sent.filter((m) => m.channel === 'hud:palette-open').pop();
+  const items = (openMsg && openMsg.payload && openMsg.payload.items) || [];
+  assert.equal(items.some((it) => it.id === 'plugin-update'), false, 'nothing to update, nothing to show');
+
+  const stateMsgs = win.webContents.sent.filter((m) => m.channel === 'hud:state');
+  const last = stateMsgs[stateMsgs.length - 1];
+  assert.equal(last && last.payload && 'pluginUpdate' in last.payload, false, 'state keeps its plain shape');
+});
+
+test('an older or equal "latest" is ignored, and previously shown updates are cleared', () => {
+  const ctx = setup({ discovery: freshDiscovery() });
+  const { hud, win } = boot(ctx);
+  hud.showPanel();
+
+  hud.setPluginUpdate({ current: '0.5.5', latest: '0.5.6' });
+  hud.setPluginUpdate({ current: '0.5.5', latest: '0.5.5' });
+  const last = win.webContents.sent.filter((m) => m.channel === 'hud:state').pop();
+  assert.equal(
+    last && last.payload && 'pluginUpdate' in last.payload,
+    false,
+    'equal versions clear the badge instead of advertising a version we are not behind'
+  );
+
+  hud.setPluginUpdate({ current: '0.5.5', latest: '0.5.4' });
+  hud._openPalette();
+  const openMsg = win.webContents.sent.filter((m) => m.channel === 'hud:palette-open').pop();
+  const items = (openMsg && openMsg.payload && openMsg.payload.items) || [];
+  assert.equal(items.some((it) => it.id === 'plugin-update'), false, 'downgrades never get an entry');
 });

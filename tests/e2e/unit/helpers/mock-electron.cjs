@@ -96,6 +96,8 @@ class MockBrowserWindow extends EventEmitter {
     this.hideCalls = 0;
     this.showCalls = 0;
     this.showInactiveCalls = 0;
+    this.opacity = 1;
+    this.opacityCalls = [];
     this.alwaysOnTop = null;
     this.skipTaskbar = null;
     this.loadedFile = null;
@@ -158,6 +160,11 @@ class MockBrowserWindow extends EventEmitter {
   showInactive() {
     this.visible = true;
     this.showInactiveCalls += 1;
+  }
+
+  setOpacity(value) {
+    this.opacity = value;
+    this.opacityCalls.push(value);
   }
 
   focus() {
@@ -223,6 +230,9 @@ function createMockElectron(overrides = {}) {
   app.setLoginItemSettings = (opts) => {
     state.loginItem = !!opts.openAtLogin;
     state.lastLoginItem = opts;
+  };
+  app.setAppUserModelId = (id) => {
+    state.aumid = id;
   };
   app.requestSingleInstanceLock = () => (overrides.singleInstance === false ? false : true);
   app.quit = () => {

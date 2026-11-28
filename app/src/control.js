@@ -135,7 +135,7 @@ class ControlBridge {
     }
     this._lastSeq = seq;
     this._saveSeq(seq);
-    fn();
+    fn(obj);
   }
 
   _loadSeq() {
